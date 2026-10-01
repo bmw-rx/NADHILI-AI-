@@ -1,0 +1,6 @@
+{
+  "name": "NADHILI AI - Cloudflare Workers Chat",
+  "description": "Production-ready AI chat platform powered by Cloudflare Workers, Cloudflare D1 SQLite memory, Groq llama-3.3-70b-versatile streaming, Claude-level UI, and JWT auth.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

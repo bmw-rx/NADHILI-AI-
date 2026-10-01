@@ -1,0 +1,30 @@
+{
+  "users": [
+    {
+      "id": "usr_60d0034f-1528-413e-a726-65ee097eb424",
+      "name": "Nadhili Dev",
+      "email": "test@nadhili.ai",
+      "password_hash": "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f",
+      "plan": "free",
+      "created_at": 1790880771
+    }
+  ],
+  "conversations": [
+    {
+      "id": "conv_44b79da7-7825-4670-97dc-b8fdea43b2a7",
+      "user_id": "usr_60d0034f-1528-413e-a726-65ee097eb424",
+      "title": "What is Cloudflare Workers in 10 words?",
+      "created_at": 1790880789,
+      "updated_at": 1790880789
+    }
+  ],
+  "messages": [
+    {
+      "id": "msg_53b6f589-7e7f-433f-8ac1-373d5332c65c",
+      "conversation_id": "conv_44b79da7-7825-4670-97dc-b8fdea43b2a7",
+      "role": "user",
+      "content": "What is Cloudflare Workers in 10 words?",
+      "created_at": 1790880789
+    }
+  ]
+}
