@@ -183,9 +183,12 @@ app.delete('/api/conversations/:id', async (req: Request, res: Response) => {
 // 7. Cloudflare Deployment Bundle
 app.get('/api/cloudflare/files', (_req: Request, res: Response) => {
   try {
-    const workerPath = path.join(__dirname, 'cloudflare-worker', 'index.js');
-    const schemaPath = path.join(__dirname, 'cloudflare-worker', 'schema.sql');
-    const wranglerPath = path.join(__dirname, 'cloudflare-worker', 'wrangler.toml');
+    const baseDir = fs.existsSync(path.join(__dirname, 'cloudflare-worker'))
+      ? __dirname
+      : process.cwd();
+    const workerPath = path.join(baseDir, 'cloudflare-worker', 'index.js');
+    const schemaPath = path.join(baseDir, 'cloudflare-worker', 'schema.sql');
+    const wranglerPath = path.join(baseDir, 'cloudflare-worker', 'wrangler.toml');
 
     const workerCode = fs.existsSync(workerPath) ? fs.readFileSync(workerPath, 'utf-8') : '';
     const schemaSql = fs.existsSync(schemaPath) ? fs.readFileSync(schemaPath, 'utf-8') : '';
@@ -750,7 +753,12 @@ async function startServer() {
       }
     });
   } else {
-    const distPath = path.resolve(__dirname, 'dist');
+    // When run via `node dist/server.js`, __dirname is the `dist` folder.
+    // When run from root, __dirname is the project root.
+    const distPath = fs.existsSync(path.join(__dirname, 'index.html'))
+      ? __dirname
+      : path.resolve(process.cwd(), 'dist');
+
     if (fs.existsSync(distPath)) {
       app.use(express.static(distPath));
       app.get('*', (_req, res) => {
@@ -764,4 +772,10 @@ async function startServer() {
   });
 }
 
-startServer();
+// Only auto-start listener in standalone Node/Render environments, not in Vercel serverless
+if (process.env.VERCEL !== '1' && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
+  startServer();
+}
+
+export { app, startServer };
+export default app;
