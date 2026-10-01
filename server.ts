@@ -17,7 +17,8 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
 app.use(express.json({ limit: '25mb' }));
 
-const SYSTEM_PROMPT = "You are NADHILI AI, a helpful intelligent assistant created by NADHILI DEVELOPER. You are knowledgeable, friendly and thorough in your responses.";
+const SYSTEM_PROMPT =
+  "You are NADHILI AI, a high-performance, intelligent assistant created by NADHILI DEVELOPER. You are knowledgeable, direct, accurate, and thorough in your code and reasoning.";
 
 // Auth middleware helper
 function getAuthUser(req: Request) {
@@ -29,22 +30,22 @@ function getAuthUser(req: Request) {
 
 // --- API ENDPOINTS ---
 
-// 0. Neon Database Status & Connect
-app.get('/api/neon/status', (_req: Request, res: Response) => {
+// 0. Database & System Status
+app.get('/api/database/status', (_req: Request, res: Response) => {
   return res.json(db.getStatus());
 });
 
-app.post('/api/neon/connect', async (req: Request, res: Response) => {
-  try {
-    const { databaseUrl } = req.body;
-    if (!databaseUrl) {
-      return res.status(400).json({ error: 'databaseUrl is required.' });
-    }
-    const result = await db.initNeon(databaseUrl);
-    return res.json({ ...result, status: db.getStatus() });
-  } catch (err: any) {
-    return res.status(400).json({ error: err.message });
-  }
+app.get('/api/system/status', (_req: Request, res: Response) => {
+  return res.json({
+    database: db.getStatus(),
+    groqConfigured: Boolean(process.env.GROQ_API_KEY),
+    openRouterConfigured: Boolean(process.env.OPENROUTER_API_KEY),
+    geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+  });
+});
+
+app.get('/api/neon/status', (_req: Request, res: Response) => {
+  return res.json(db.getStatus());
 });
 
 // 1. Auth: Sign up
@@ -52,7 +53,9 @@ app.post('/api/auth/signup', async (req: Request, res: Response) => {
   try {
     const { name, email, password } = req.body;
     if (!name || !email || !password || password.length < 6) {
-      return res.status(400).json({ error: 'Name, valid email, and password (min 6 chars) are required.' });
+      return res
+        .status(400)
+        .json({ error: 'Name, valid email, and password (min 6 chars) are required.' });
     }
 
     const existing = await db.findUserByEmail(email);
@@ -198,14 +201,16 @@ app.get('/api/cloudflare/files', (_req: Request, res: Response) => {
   }
 });
 
-// 8. Chat: Real-time Streaming SSE (Groq with Gemini Fallback)
+// 8. Chat: Real-time Streaming SSE (Groq & OpenRouter First, Gemini Fallback)
 app.post('/api/chat', async (req: Request, res: Response) => {
   try {
-    const { conversationId, message, messages, model, imageBase64 } = req.body;
+    const { conversationId, message, messages, model, imageBase64, aiProvider } = req.body;
     const auth = getAuthUser(req);
 
-    const clientGroqKey = (req.headers['x-groq-api-key'] as string) || '';
-    const groqKey = clientGroqKey || process.env.GROQ_API_KEY || '';
+    // API keys are strictly loaded from server environment variables (never client input)
+    const groqKey = process.env.GROQ_API_KEY || '';
+    const openRouterKey = process.env.OPENROUTER_API_KEY || '';
+    const preferredProvider = aiProvider || (groqKey ? 'groq' : openRouterKey ? 'openrouter' : 'auto');
 
     // Set up SSE headers
     res.writeHead(200, {
@@ -218,7 +223,11 @@ app.post('/api/chat', async (req: Request, res: Response) => {
     let activeConvId = conversationId;
     if (auth) {
       if (!activeConvId) {
-        const title = message ? (message.length > 40 ? message.slice(0, 40) + '...' : message) : 'New Query';
+        const title = message
+          ? message.length > 40
+            ? message.slice(0, 40) + '...'
+            : message
+          : 'New Query';
         const newConv = await db.createConversation(auth.userId, title);
         activeConvId = newConv.id;
       }
@@ -232,13 +241,11 @@ app.post('/api/chat', async (req: Request, res: Response) => {
     if (Array.isArray(messages)) {
       for (const m of messages) {
         if ((m.role === 'user' || m.role === 'assistant') && m.content && m.content.trim()) {
-          // Avoid duplicate user message if already present as last turn
           conversationHistory.push({ role: m.role, content: m.content.trim() });
         }
       }
     }
 
-    // If message is not the last item in conversationHistory, append it
     const lastItem = conversationHistory[conversationHistory.length - 1];
     if (!lastItem || lastItem.role !== 'user' || lastItem.content !== (message || '').trim()) {
       if (message || imageBase64) {
@@ -247,93 +254,77 @@ app.post('/api/chat', async (req: Request, res: Response) => {
     }
 
     let fullAssistantText = '';
+    let streamedSuccess = false;
 
-    // Path A: Groq API configured
-    if (groqKey) {
+    // Determine execution priority based on provider preference and available keys
+    const tryGroqFirst =
+      preferredProvider === 'groq' ||
+      (preferredProvider === 'auto' && Boolean(groqKey));
+
+    const tryOpenRouterFirst =
+      preferredProvider === 'openrouter' ||
+      (preferredProvider === 'auto' && !groqKey && Boolean(openRouterKey));
+
+    // ROUTE 1: Groq API
+    if (tryGroqFirst && groqKey) {
       try {
-        const groqMessages: any[] = [{ role: 'system', content: SYSTEM_PROMPT }];
-
-        for (let i = 0; i < conversationHistory.length; i++) {
-          const item = conversationHistory[i];
-          const isLatest = i === conversationHistory.length - 1;
-          if (isLatest && imageBase64) {
-            groqMessages.push({
-              role: 'user',
-              content: [
-                { type: 'text', text: item.content || 'Analyze this image.' },
-                { type: 'image_url', image_url: { url: imageBase64 } },
-              ],
-            });
-          } else {
-            groqMessages.push({ role: item.role, content: item.content });
-          }
-        }
-
-        let selectedModel = 'llama-3.3-70b-versatile';
-        if (imageBase64) {
-          selectedModel = 'llama-3.2-11b-vision-preview';
-        } else if (model === 'claude-3-5-haiku') {
-          selectedModel = 'llama-3.1-8b-instant';
-        } else if (model && model.startsWith('llama-')) {
-          selectedModel = model;
-        } else {
-          selectedModel = 'llama-3.3-70b-versatile';
-        }
-
-        const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${groqKey}`,
-          },
-          body: JSON.stringify({
-            model: selectedModel,
-            messages: groqMessages,
-            temperature: 0.7,
-            stream: true,
-          }),
-        });
-
-        if (!groqRes.ok || !groqRes.body) {
-          const errText = await groqRes.text();
-          throw new Error(`Groq API Error (${groqRes.status}): ${errText}`);
-        }
-
-        const reader = groqRes.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed.startsWith('data: ')) {
-              const dataStr = trimmed.slice(6);
-              if (dataStr === '[DONE]') break;
-              try {
-                const parsed = JSON.parse(dataStr);
-                const delta = parsed.choices?.[0]?.delta?.content || '';
-                if (delta) {
-                  fullAssistantText += delta;
-                  res.write(`data: ${JSON.stringify({ text: delta, conversationId: activeConvId })}\n\n`);
-                }
-              } catch {}
-            }
-          }
-        }
+        fullAssistantText = await streamWithGroq(
+          res,
+          activeConvId,
+          conversationHistory,
+          model,
+          imageBase64,
+          groqKey
+        );
+        streamedSuccess = true;
       } catch (groqErr: any) {
-        console.warn('Groq streaming failed, falling back to Gemini API:', groqErr.message);
-        fullAssistantText = await streamWithGemini(req, res, activeConvId, conversationHistory, imageBase64);
+        console.warn('Groq streaming attempt failed:', groqErr.message);
       }
-    } else {
-      // Path B: Default fallback with Gemini
-      fullAssistantText = await streamWithGemini(req, res, activeConvId, conversationHistory, imageBase64);
+    }
+
+    // ROUTE 2: OpenRouter API (if Route 1 failed or if OpenRouter chosen)
+    if (!streamedSuccess && openRouterKey) {
+      try {
+        fullAssistantText = await streamWithOpenRouter(
+          res,
+          activeConvId,
+          conversationHistory,
+          model,
+          imageBase64,
+          openRouterKey
+        );
+        streamedSuccess = true;
+      } catch (openRouterErr: any) {
+        console.warn('OpenRouter streaming attempt failed:', openRouterErr.message);
+      }
+    }
+
+    // ROUTE 3: If Groq was not tried yet and key is present, try now
+    if (!streamedSuccess && groqKey && !tryGroqFirst) {
+      try {
+        fullAssistantText = await streamWithGroq(
+          res,
+          activeConvId,
+          conversationHistory,
+          model,
+          imageBase64,
+          groqKey
+        );
+        streamedSuccess = true;
+      } catch (groqErr: any) {
+        console.warn('Groq secondary stream failed:', groqErr.message);
+      }
+    }
+
+    // ROUTE 4: Gemini fallback (if neither Groq nor OpenRouter succeeded)
+    if (!streamedSuccess) {
+      fullAssistantText = await streamWithGemini(
+        req,
+        res,
+        activeConvId,
+        conversationHistory,
+        imageBase64
+      );
     }
 
     // Persist assistant reply to database
@@ -355,6 +346,194 @@ app.post('/api/chat', async (req: Request, res: Response) => {
   }
 });
 
+// Helper for Groq API Streaming
+async function streamWithGroq(
+  res: Response,
+  activeConvId: string | undefined,
+  conversationHistory: { role: 'user' | 'assistant'; content: string }[],
+  model: string | undefined,
+  imageBase64: string | undefined,
+  groqKey: string
+): Promise<string> {
+  const groqMessages: any[] = [{ role: 'system', content: SYSTEM_PROMPT }];
+
+  for (let i = 0; i < conversationHistory.length; i++) {
+    const item = conversationHistory[i];
+    const isLatest = i === conversationHistory.length - 1;
+    if (isLatest && imageBase64) {
+      groqMessages.push({
+        role: 'user',
+        content: [
+          { type: 'text', text: item.content || 'Analyze this image.' },
+          { type: 'image_url', image_url: { url: imageBase64 } },
+        ],
+      });
+    } else {
+      groqMessages.push({ role: item.role, content: item.content });
+    }
+  }
+
+  // Model selection mapping for Groq
+  let selectedModel = 'llama-3.3-70b-versatile';
+  if (imageBase64) {
+    selectedModel = 'llama-3.2-11b-vision-preview';
+  } else if (model === 'nadhili-fast-instant') {
+    selectedModel = 'llama-3.1-8b-instant';
+  } else if (model === 'nadhili-r1-deep') {
+    selectedModel = 'deepseek-r1-distill-llama-70b';
+  } else if (model && model.startsWith('llama-')) {
+    selectedModel = model;
+  } else {
+    selectedModel = 'llama-3.3-70b-versatile';
+  }
+
+  const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${groqKey}`,
+    },
+    body: JSON.stringify({
+      model: selectedModel,
+      messages: groqMessages,
+      temperature: 0.7,
+      stream: true,
+    }),
+  });
+
+  if (!groqRes.ok || !groqRes.body) {
+    const errText = await groqRes.text();
+    throw new Error(`Groq API Error (${groqRes.status}): ${errText}`);
+  }
+
+  const reader = groqRes.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullAssistantText = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('data: ')) {
+        const dataStr = trimmed.slice(6);
+        if (dataStr === '[DONE]') break;
+        try {
+          const parsed = JSON.parse(dataStr);
+          const delta = parsed.choices?.[0]?.delta?.content || '';
+          if (delta) {
+            fullAssistantText += delta;
+            res.write(`data: ${JSON.stringify({ text: delta, conversationId: activeConvId })}\n\n`);
+          }
+        } catch {}
+      }
+    }
+  }
+
+  return fullAssistantText;
+}
+
+// Helper for OpenRouter API Streaming
+async function streamWithOpenRouter(
+  res: Response,
+  activeConvId: string | undefined,
+  conversationHistory: { role: 'user' | 'assistant'; content: string }[],
+  model: string | undefined,
+  imageBase64: string | undefined,
+  openRouterKey: string
+): Promise<string> {
+  const openRouterMessages: any[] = [{ role: 'system', content: SYSTEM_PROMPT }];
+
+  for (let i = 0; i < conversationHistory.length; i++) {
+    const item = conversationHistory[i];
+    const isLatest = i === conversationHistory.length - 1;
+    if (isLatest && imageBase64) {
+      openRouterMessages.push({
+        role: 'user',
+        content: [
+          { type: 'text', text: item.content || 'Analyze this image.' },
+          { type: 'image_url', image_url: { url: imageBase64 } },
+        ],
+      });
+    } else {
+      openRouterMessages.push({ role: item.role, content: item.content });
+    }
+  }
+
+  // Model selection mapping for OpenRouter
+  let selectedModel = 'meta-llama/llama-3.3-70b-instruct';
+  if (imageBase64) {
+    selectedModel = 'meta-llama/llama-3.2-11b-vision-instruct';
+  } else if (model === 'nadhili-r1-deep' || model === 'deepseek-r1') {
+    selectedModel = 'deepseek/deepseek-r1';
+  } else if (model === 'nadhili-fast-instant') {
+    selectedModel = 'meta-llama/llama-3.1-8b-instruct';
+  } else if (model && model.includes('/')) {
+    selectedModel = model;
+  } else {
+    selectedModel = 'meta-llama/llama-3.3-70b-instruct';
+  }
+
+  const routerRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${openRouterKey}`,
+      'HTTP-Referer': 'https://nadhili.ai',
+      'X-Title': 'NADHILI AI',
+    },
+    body: JSON.stringify({
+      model: selectedModel,
+      messages: openRouterMessages,
+      temperature: 0.7,
+      stream: true,
+    }),
+  });
+
+  if (!routerRes.ok || !routerRes.body) {
+    const errText = await routerRes.text();
+    throw new Error(`OpenRouter API Error (${routerRes.status}): ${errText}`);
+  }
+
+  const reader = routerRes.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullAssistantText = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('data: ')) {
+        const dataStr = trimmed.slice(6);
+        if (dataStr === '[DONE]') break;
+        try {
+          const parsed = JSON.parse(dataStr);
+          const delta = parsed.choices?.[0]?.delta?.content || '';
+          if (delta) {
+            fullAssistantText += delta;
+            res.write(`data: ${JSON.stringify({ text: delta, conversationId: activeConvId })}\n\n`);
+          }
+        } catch {}
+      }
+    }
+  }
+
+  return fullAssistantText;
+}
+
 // Helper for Gemini with smooth SSE streaming
 async function streamWithGemini(
   _req: Request,
@@ -365,12 +544,20 @@ async function streamWithGemini(
 ): Promise<string> {
   const geminiApiKey = process.env.GEMINI_API_KEY;
   if (!geminiApiKey) {
-    const errorMsg = 'Please provide a Groq API Key in Settings or set GEMINI_API_KEY.';
+    const errorMsg =
+      'Welcome to NADHILI AI! To chat with unlimited speed, please configure GROQ_API_KEY or OPENROUTER_API_KEY in your server environment variables.';
     res.write(`data: ${JSON.stringify({ text: errorMsg, conversationId: activeConvId })}\n\n`);
     return errorMsg;
   }
 
-  const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+  const ai = new GoogleGenAI({
+    apiKey: geminiApiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
 
   const contents: any[] = [];
   for (let i = 0; i < conversationHistory.length; i++) {
@@ -402,58 +589,51 @@ async function streamWithGemini(
     contents.push({ role: 'user', parts: [{ text: 'Hello' }] });
   }
 
-  let result: any = null;
-  let lastError = '';
+  try {
+    const responseStream = await ai.models.generateContentStream({
+      model: 'gemini-3.8-flash',
+      contents,
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        temperature: 0.7,
+      },
+    });
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      result = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents,
-        config: {
-          systemInstruction: SYSTEM_PROMPT,
-          temperature: 0.7,
-        },
-      });
-      if (result) break;
-    } catch (err: any) {
-      lastError = err.message || '';
-      console.warn(`Gemini attempt ${attempt} failed:`, lastError);
-      if (attempt < 2) {
-        await new Promise((r) => setTimeout(r, 600));
+    let fullResponse = '';
+    for await (const chunk of responseStream) {
+      const text = chunk.text;
+      if (text) {
+        fullResponse += text;
+        res.write(`data: ${JSON.stringify({ text, conversationId: activeConvId })}\n\n`);
       }
     }
-  }
-
-  let fullResponse = result?.text;
-
-  // If upstream is temporarily busy, provide intelligent NADHILI response
-  if (!fullResponse) {
+    return fullResponse;
+  } catch (err: any) {
+    console.warn('Gemini stream notice:', err.message);
     const latestUserMsg = conversationHistory[conversationHistory.length - 1]?.content || '';
-    fullResponse = generateIntelligentFallbackResponse(latestUserMsg);
-  }
+    const fallbackText = generateIntelligentFallbackResponse(latestUserMsg);
 
-  // Stream out chunks smoothly over SSE
-  const words = fullResponse.split(/(\s+)/);
-  let buffer = '';
+    const words = fallbackText.split(/(\s+)/);
+    let buffer = '';
 
-  for (let i = 0; i < words.length; i++) {
-    buffer += words[i];
-    if (i % 4 === 0 || i === words.length - 1) {
-      res.write(`data: ${JSON.stringify({ text: buffer, conversationId: activeConvId })}\n\n`);
-      buffer = '';
-      await new Promise((r) => setTimeout(r, 15));
+    for (let i = 0; i < words.length; i++) {
+      buffer += words[i];
+      if (i % 4 === 0 || i === words.length - 1) {
+        res.write(`data: ${JSON.stringify({ text: buffer, conversationId: activeConvId })}\n\n`);
+        buffer = '';
+        await new Promise((r) => setTimeout(r, 15));
+      }
     }
-  }
 
-  if (buffer) {
-    res.write(`data: ${JSON.stringify({ text: buffer, conversationId: activeConvId })}\n\n`);
-  }
+    if (buffer) {
+      res.write(`data: ${JSON.stringify({ text: buffer, conversationId: activeConvId })}\n\n`);
+    }
 
-  return fullResponse;
+    return fallbackText;
+  }
 }
 
-// Intelligent fallback generator for zero-error guarantee during upstream model spikes
+// Intelligent fallback generator
 function generateIntelligentFallbackResponse(prompt: string): string {
   const p = prompt.toLowerCase();
 
@@ -494,19 +674,18 @@ export default {
 };
 \`\`\`
 
-**Key Edge Features:**
-- **Zero Cold Starts**: Deployed on Cloudflare V8 isolates across 300+ cities globally.
-- **D1 Prepared Statements**: Immune to SQL injection via parameterized query binding (\`.bind(...)\`).
+**Key Features:**
+- **Zero Cold Starts**: Deployed on Cloudflare V8 isolates across 300+ locations globally.
+- **D1 Prepared Statements**: Parameterized query binding prevents SQL injection.
 - **Web Crypto Integration**: Native \`crypto.subtle\` HMAC-SHA256 session validation.`;
   }
 
   if (p.includes('jwt') || p.includes('auth') || p.includes('crypto')) {
-    return `### Web Crypto JWT Authentication at Cloudflare Edge
+    return `### Web Crypto JWT Authentication at the Edge
 
-In Cloudflare Workers, we use the standardized **Web Crypto API** (\`crypto.subtle\`) for zero-dependency HMAC-SHA256 signing and verification:
+In NADHILI AI, we use the standardized **Web Crypto API** (\`crypto.subtle\`) for zero-dependency HMAC-SHA256 signing:
 
 \`\`\`javascript
-// 1. Sign JWT Token
 async function signJWT(payload, secret) {
   const enc = new TextEncoder();
   const header = { alg: 'HS256', typ: 'JWT' };
@@ -527,32 +706,27 @@ async function signJWT(payload, secret) {
   const sigB64 = btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/=/g, '').replace(/\\+/g, '-').replace(/\\//g, '_');
   return \`\${unsigned}.\${sigB64}\`;
 }
-\`\`\`
-
-**Security Advantages:**
-- No heavy Node modules (\`jsonwebtoken\`) required.
-- Executes within microseconds inside V8 isolates.
-- Constant-time verification prevents timing attacks.`;
+\`\`\``;
   }
 
   if (p.includes('hello') || p.includes('hi') || p.includes('who are you') || p.includes('introduce')) {
     return `Hello! I am **NADHILI AI**, an intelligent assistant created by **NADHILI DEVELOPER**.
 
-I am built to run at the edge on **Cloudflare Workers** with **Cloudflare D1 (SQLite)** persistent memory and **Groq LLaMA 3.3 70B** ultra-high-speed reasoning.
+I am built to run with **Groq LLaMA 3.3 70B** ultra-high-speed streaming, **OpenRouter multi-model integration**, and **PostgreSQL / Cloudflare D1** persistent memory.
 
-How can I assist you with your code, architecture, or project today?`;
+How can I assist you with your project, architecture, or code today?`;
   }
 
-  return `I am **NADHILI AI**, your edge assistant created by **NADHILI DEVELOPER**.
+  return `I am **NADHILI AI**, created by **NADHILI DEVELOPER**.
 
 Regarding **"${prompt.slice(0, 50)}"**:
 
-NADHILI AI is fully operational with:
-- **Cloudflare Workers Edge Runtime**: Global microsecond routing.
-- **Cloudflare D1**: SQLite persistence for accounts, chats, and messages.
-- **Groq LLaMA 3.3 70B & Vision**: High-speed multi-turn streaming.
+NADHILI AI is operational with:
+- **Groq & OpenRouter Support**: LLaMA 3.3 70B, DeepSeek R1, and vision models.
+- **PostgreSQL Database Storage**: Memory and history persisted to your database URL.
+- **Edge Architecture**: Fast, lightweight, and responsive.
 
-*(Tip: You can also enter your personal Groq API key under Settings ⚙️ to route directly to your dedicated Groq quota at 300+ tokens/sec!)*`;
+*(Tip: NADHILI AI operates with Groq LLaMA 3.3 70B & OpenRouter, with PostgreSQL persistent memory configured in the server environment.)*`;
 }
 
 // 9. Start Dev Server / Static Hosting
@@ -564,6 +738,17 @@ async function startServer() {
       appType: 'spa',
     });
     app.use(vite.middlewares);
+    app.use('*', async (req, res, next) => {
+      const url = req.originalUrl;
+      try {
+        let template = fs.readFileSync(path.resolve(__dirname, 'index.html'), 'utf-8');
+        template = await vite.transformIndexHtml(url, template);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e) {
+        vite.ssrFixStacktrace(e as Error);
+        next(e);
+      }
+    });
   } else {
     const distPath = path.resolve(__dirname, 'dist');
     if (fs.existsSync(distPath)) {

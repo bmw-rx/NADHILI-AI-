@@ -37,78 +37,78 @@
 }
 
 /* Markdown styling inside prose */
-.prose-claude {
+.prose-nadhili {
   color: #d1d5db;
   line-height: 1.7;
 }
-.prose-claude p {
+.prose-nadhili p {
   margin-bottom: 0.9em;
 }
-.prose-claude p:last-child {
+.prose-nadhili p:last-child {
   margin-bottom: 0;
 }
-.prose-claude h1, .prose-claude h2, .prose-claude h3, .prose-claude h4 {
+.prose-nadhili h1, .prose-nadhili h2, .prose-nadhili h3, .prose-nadhili h4 {
   color: #f3f4f6;
   font-weight: 600;
   margin-top: 1.2em;
   margin-bottom: 0.6em;
 }
-.prose-claude h1 { font-size: 1.45rem; }
-.prose-claude h2 { font-size: 1.25rem; }
-.prose-claude h3 { font-size: 1.1rem; }
-.prose-claude ul, .prose-claude ol {
+.prose-nadhili h1 { font-size: 1.45rem; }
+.prose-nadhili h2 { font-size: 1.25rem; }
+.prose-nadhili h3 { font-size: 1.1rem; }
+.prose-nadhili ul, .prose-nadhili ol {
   margin-left: 1.4em;
   margin-bottom: 0.9em;
 }
-.prose-claude ul { list-style-type: disc; }
-.prose-claude ol { list-style-type: decimal; }
-.prose-claude li {
+.prose-nadhili ul { list-style-type: disc; }
+.prose-nadhili ol { list-style-type: decimal; }
+.prose-nadhili li {
   margin-bottom: 0.35em;
 }
-.prose-claude pre {
+.prose-nadhili pre {
   margin: 0.85em 0;
   border-radius: 0.5rem;
   background-color: #121212;
   border: 1px solid #262626;
   overflow-x: auto;
 }
-.prose-claude code {
+.prose-nadhili code {
   color: #f5a623;
   background-color: rgba(245, 166, 35, 0.1);
   padding: 0.15em 0.35em;
   border-radius: 0.25rem;
   font-size: 0.88em;
 }
-.prose-claude pre code {
+.prose-nadhili pre code {
   color: #e5e7eb;
   background-color: transparent;
   padding: 0;
   border-radius: 0;
 }
-.prose-claude blockquote {
+.prose-nadhili blockquote {
   border-left: 3px solid #f5a623;
   padding-left: 1rem;
   color: #9ca3af;
   margin: 0.9em 0;
   font-style: italic;
 }
-.prose-claude table {
+.prose-nadhili table {
   width: 100%;
   border-collapse: collapse;
   margin: 1em 0;
   font-size: 0.9em;
 }
-.prose-claude th, .prose-claude td {
+.prose-nadhili th, .prose-nadhili td {
   border: 1px solid #2b2b2b;
   padding: 0.55rem 0.85rem;
   text-align: left;
 }
-.prose-claude th {
+.prose-nadhili th {
   background-color: #181818;
   color: #f3f4f6;
   font-weight: 600;
 }
-.prose-claude tr:nth-child(even) {
+.prose-nadhili tr:nth-child(even) {
   background-color: #111111;
 }
 

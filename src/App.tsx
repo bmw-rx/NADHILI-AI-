@@ -30,6 +30,7 @@ import {
   Settings,
   ShieldCheck,
   Zap,
+  Cpu,
 } from 'lucide-react';
 import { MarkdownRenderer } from './components/MarkdownRenderer';
 
@@ -78,31 +79,32 @@ interface ModelOption {
 
 const MODELS: ModelOption[] = [
   {
-    id: 'claude-3-7-sonnet',
-    name: 'Sonnet 3.7',
-    tag: 'Hybrid',
-    badge: 'Latest',
-    description: 'Hybrid reasoning • Code intelligence & extended thinking',
+    id: 'nadhili-3-3-versatile',
+    name: 'NADHILI 3.3 Versatile',
+    tag: 'Groq 70B',
+    badge: 'Fastest',
+    description: 'Ultra-fast 300+ tok/s reasoning, coding & thorough synthesis via Groq',
     highlight: true,
   },
   {
-    id: 'claude-3-5-sonnet',
-    name: 'Sonnet 3.5',
-    tag: 'Smart',
-    badge: 'Popular',
-    description: 'High-speed reasoning, coding & thorough synthesis',
+    id: 'nadhili-3-7-reasoning',
+    name: 'NADHILI 3.7 Reasoning',
+    tag: 'Hybrid',
+    badge: 'Smart',
+    description: 'Hybrid reasoning • Code intelligence & extended thinking',
   },
   {
-    id: 'claude-3-opus',
-    name: 'Opus 3',
-    tag: 'Deep',
-    description: 'Complex analysis, research & deep domain expertise',
+    id: 'nadhili-r1-deep',
+    name: 'NADHILI R1 Deep',
+    tag: 'DeepSeek',
+    badge: 'Reasoning',
+    description: 'Deep mathematical & algorithmic reasoning via OpenRouter/Groq',
   },
   {
-    id: 'claude-3-5-haiku',
-    name: 'Haiku 3.5',
-    tag: 'Fast',
-    badge: 'Edge',
+    id: 'nadhili-fast-instant',
+    name: 'NADHILI Fast Instant',
+    tag: 'Groq 8B',
+    badge: 'Instant',
     description: 'Instant lightweight responses & lightning execution',
   },
 ];
@@ -118,7 +120,7 @@ export default function App() {
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
 
   const [selectedModel, setSelectedModel] = useState<string>(() => {
-    return localStorage.getItem('nadhili_model') || 'claude-3-7-sonnet';
+    return localStorage.getItem('nadhili_model') || 'nadhili-3-3-versatile';
   });
   const [isGenerating, setIsGenerating] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -146,13 +148,30 @@ export default function App() {
   });
 
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'ai' | 'database' | 'persona'>('ai');
   const [creativityLevel, setCreativityLevel] = useState<'balanced' | 'creative' | 'precise'>('balanced');
   const [systemPersona, setSystemPersona] = useState<string>('default');
 
-  // Cloud Database Status
+  // AI Engine Preferences
+  const [aiProvider, setAiProvider] = useState<'auto' | 'groq' | 'openrouter'>(() => {
+    return (localStorage.getItem('nadhili_ai_provider') as any) || 'auto';
+  });
+
+  // Server-managed System & Database Status (Zero client secrets)
   const [dbStatus, setDbStatus] = useState<{ provider: string; connected: boolean }>({
-    provider: 'Cloud Database (Active)',
-    connected: true,
+    provider: 'Checking...',
+    connected: false,
+  });
+  const [systemStatus, setSystemStatus] = useState<{
+    database: { connected: boolean; provider: string };
+    groqConfigured: boolean;
+    openRouterConfigured: boolean;
+    geminiConfigured: boolean;
+  }>({
+    database: { connected: false, provider: 'Checking...' },
+    groqConfigured: false,
+    openRouterConfigured: false,
+    geminiConfigured: false,
   });
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -177,23 +196,32 @@ export default function App() {
 
   // --- INITIAL LOAD & AUTH ---
   useEffect(() => {
-    fetchDbStatus();
+    fetchSystemStatus();
     if (token) {
       fetchUser();
       fetchConversations();
     }
   }, [token]);
 
-  const fetchDbStatus = async () => {
+  const fetchSystemStatus = async () => {
     try {
-      const res = await fetch('/api/neon/status');
+      const res = await fetch('/api/system/status');
       if (res.ok) {
         const data = await res.json();
-        setDbStatus(data);
+        setSystemStatus(data);
+        if (data.database) {
+          setDbStatus(data.database);
+        }
       }
     } catch {
       // Backend handles fallback
     }
+  };
+
+  const handleSelectAiProvider = (prov: 'auto' | 'groq' | 'openrouter') => {
+    setAiProvider(prov);
+    localStorage.setItem('nadhili_ai_provider', prov);
+    showToast(`AI Engine set to ${prov === 'auto' ? 'Auto (Fastest)' : prov.toUpperCase()}`);
   };
 
   const fetchUser = async () => {
@@ -469,6 +497,7 @@ export default function App() {
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          'x-ai-provider': aiProvider,
         },
         body: JSON.stringify({
           conversationId: currentConversationId,
@@ -476,6 +505,7 @@ export default function App() {
           messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
           model: selectedModel,
           imageBase64: imageBase64 || undefined,
+          aiProvider,
         }),
         signal: abortControllerRef.current.signal,
       });
@@ -719,19 +749,19 @@ export default function App() {
         {/* Brand Header */}
         <div className="p-4 flex items-center justify-between border-b border-[#222220]">
           <div className="flex items-center gap-2.5">
-            {/* Claude Terracotta Star */}
+            {/* NADHILI Brand Icon */}
             <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#da7756] to-[#eb947a] text-white font-serif font-bold text-sm flex items-center justify-center shadow-[0_0_12px_rgba(218,119,86,0.3)]">
-              C
+              N
             </div>
             <div>
               <div className="flex items-center gap-1.5">
                 <span className="text-sm font-semibold tracking-wide text-white">NADHILI AI</span>
                 <span className="text-[9px] px-1.5 py-0.5 rounded font-mono font-medium border bg-emerald-500/10 text-emerald-400 border-emerald-500/30 flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  Synced
+                  {dbStatus.connected ? 'Cloud DB' : 'Local'}
                 </span>
               </div>
-              <p className="text-[10px] text-neutral-400">Claude-Powered Edge Architecture</p>
+              <p className="text-[10px] text-neutral-400">NADHILI Edge & Cloud DB</p>
             </div>
           </div>
           <button
@@ -912,8 +942,33 @@ export default function App() {
             </span>
           </div>
 
-          {/* Account / User Avatar */}
+          {/* Account / User Avatar / Database & Settings */}
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setSettingsTab('database');
+                setSettingsModalOpen(true);
+              }}
+              title="Database Memory Storage"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border bg-[#1d1d1b] border-[#30302c] hover:border-[#da7756]/50 transition text-neutral-300"
+            >
+              <Database className={`w-3.5 h-3.5 ${dbStatus.connected ? 'text-emerald-400' : 'text-amber-400'}`} />
+              <span className="hidden sm:inline-block">
+                {dbStatus.connected ? 'PostgreSQL Active' : 'Memory Storage'}
+              </span>
+            </button>
+
+            <button
+              onClick={() => {
+                setSettingsTab('ai');
+                setSettingsModalOpen(true);
+              }}
+              title="Settings & Preferences"
+              className="w-8 h-8 rounded-full bg-[#20201e] hover:bg-[#2c2c29] border border-[#333330] flex items-center justify-center text-neutral-300 hover:text-white transition shadow-sm"
+            >
+              <Settings className="w-4 h-4 text-neutral-300" />
+            </button>
+
             <button
               onClick={() => setProModalOpen(true)}
               className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-[#da7756]/10 text-[#da7756] border border-[#da7756]/30 hover:bg-[#da7756]/20 transition"
@@ -947,16 +1002,14 @@ export default function App() {
         <div ref={chatScrollRef} className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
           {messages.length === 0 ? (
             <div className="max-w-2xl mx-auto my-auto text-center pt-24 pb-12 flex flex-col items-center justify-center">
-              {/* Claude Signature Terracotta Star */}
-              <div className="w-12 h-12 flex items-center justify-center mx-auto mb-4 select-none">
-                <svg viewBox="0 0 24 24" className="w-10 h-10 text-[#da7756]" fill="currentColor">
-                  <path d="M12 1.5a1 1 0 0 1 1 1v3.2a1 1 0 0 1-2 0v-3.2a1 1 0 0 1 1-1zm4.72 2.05a1 1 0 0 1 1.37.37l1.6 2.77a1 1 0 1 1-1.73 1l-1.6-2.77a1 1 0 0 1 .36-1.37zm4.23 4.23a1 1 0 0 1 .37 1.37l-1.6 2.77a1 1 0 0 1-1.73-1l1.6-2.77a1 1 0 0 1 1.36-.37zM22.5 12a1 1 0 0 1-1 1h-3.2a1 1 0 0 1 0-2h3.2a1 1 0 0 1 1 1zm-2.05 4.72a1 1 0 0 1-.37 1.37l-2.77 1.6a1 1 0 1 1-1-1.73l2.77-1.6a1 1 0 0 1 1.37.36zm-4.23 4.23a1 1 0 0 1-1.37.37l-2.77-1.6a1 1 0 0 1 1-1.73l2.77 1.6a1 1 0 0 1 .37 1.36zM12 22.5a1 1 0 0 1-1-1v-3.2a1 1 0 0 1 2 0v3.2a1 1 0 0 1-1 1zm-4.72-2.05a1 1 0 0 1-1.37-.37l-1.6-2.77a1 1 0 1 1 1.73-1l1.6 2.77a1 1 0 0 1-.36 1.37zm-4.23-4.23a1 1 0 0 1-.37-1.37l1.6-2.77a1 1 0 0 1 1.73 1l-1.6 2.77a1 1 0 0 1-1.36.37zM1.5 12a1 1 0 0 1 1-1h3.2a1 1 0 0 1 0 2H2.5a1 1 0 0 1-1-1zm2.05-4.72a1 1 0 0 1 .37-1.37l2.77-1.6a1 1 0 1 1 1 1.73l-2.77 1.6a1 1 0 0 1-1.37-.36zm4.23-4.23a1 1 0 0 1 1.37-.37l2.77 1.6a1 1 0 1 1-1 1.73l-2.77-1.6a1 1 0 0 1-.37-1.36z" />
-                </svg>
+              {/* NADHILI Brand Icon */}
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-[#da7756] to-[#eb947a] text-white font-serif font-bold text-2xl flex items-center justify-center mx-auto mb-4 shadow-[0_0_24px_rgba(218,119,86,0.35)] select-none">
+                N
               </div>
 
-              {/* Claude Serif "Let's noodle" */}
+              {/* NADHILI Welcome */}
               <h2 className="text-3xl sm:text-4xl font-serif text-[#ede8dd] font-normal tracking-tight mb-3">
-                Let&apos;s noodle
+                How can NADHILI AI help today?
               </h2>
               <p className="text-sm text-neutral-400 max-w-md mx-auto mb-8">
                 Ask a question, write code, analyze data, or upload files and images using the <span className="text-[#da7756] font-semibold">+</span> button below.
@@ -1055,11 +1108,11 @@ export default function App() {
                 return (
                   <div key={index} className="flex gap-3.5 group">
                     <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#da7756] to-[#eb947a] text-white font-serif font-bold text-xs flex items-center justify-center shrink-0 mt-0.5 shadow-[0_0_10px_rgba(218,119,86,0.25)]">
-                      C
+                      N
                     </div>
                     <div className="flex-1 max-w-[90%] min-w-0">
                       <div className="text-xs font-semibold text-neutral-300 mb-1 flex items-center gap-2">
-                        <span>Claude</span>
+                        <span>NADHILI AI</span>
                         <span className="text-[10px] text-neutral-500 font-normal font-mono">{activeModelObj.name}</span>
                       </div>
 
@@ -1106,14 +1159,14 @@ export default function App() {
           )}
         </div>
 
-        {/* --- CLAUDE FLOATING INPUT BAR (Matching user circled image) --- */}
+        {/* --- NADHILI FLOATING INPUT BAR --- */}
         <div className="p-4 pt-1 bg-[#141413] shrink-0">
           <div className="max-w-3xl mx-auto">
             {/* Input Island Card */}
             <div className="bg-[#1c1c1a] border border-[#2d2d2a] focus-within:border-[#444] rounded-[26px] p-3 shadow-2xl transition">
               {/* Top Banner (Upgrade to Pro) */}
               <div className="flex items-center justify-between px-2 pt-0.5 pb-2 text-[11px] text-neutral-400 border-b border-[#292928] mb-1.5">
-                <span>Get more with Claude Pro</span>
+                <span>Get more with NADHILI Pro</span>
                 <button
                   onClick={() => setProModalOpen(true)}
                   className="text-[#b197fc] hover:text-[#c7b5fd] font-semibold transition"
@@ -1169,7 +1222,7 @@ export default function App() {
                     handleSendMessage();
                   }
                 }}
-                placeholder="Reply to Claude..."
+                placeholder="Reply to NADHILI AI or paste code..."
                 className="w-full bg-transparent resize-none focus:outline-none text-[15px] text-[#ede8dd] placeholder-neutral-500 max-h-48 px-2 py-1 leading-relaxed"
               />
 
@@ -1240,7 +1293,7 @@ export default function App() {
                     {modelDropdownOpen && (
                       <div className="absolute bottom-full left-0 mb-2 w-72 bg-[#1b1b19] border border-[#33332f] rounded-2xl shadow-2xl py-2 z-50 text-xs">
                         <div className="px-3.5 py-1.5 text-[10px] uppercase tracking-wider font-semibold text-neutral-500 border-b border-[#292925] mb-1">
-                          Select Claude Model
+                          Select NADHILI Model
                         </div>
                         {MODELS.map((m) => {
                           const isSelected = m.id === selectedModel;
@@ -1326,7 +1379,7 @@ export default function App() {
             </div>
 
             <p className="text-[11px] text-neutral-500 text-center mt-2.5">
-              Claude can make mistakes. Please verify important technical and legal information.
+              NADHILI AI can make mistakes. Please verify important technical and legal information.
             </p>
           </div>
         </div>
@@ -1347,7 +1400,7 @@ export default function App() {
               <Crown className="w-6 h-6" />
             </div>
 
-            <h3 className="text-xl font-bold text-center text-white mb-1">Upgrade to Claude Pro</h3>
+            <h3 className="text-xl font-bold text-center text-white mb-1">Upgrade to NADHILI Pro</h3>
             <p className="text-xs text-center text-neutral-400 mb-6">
               5x more usage, priority edge processing, and access to all preview models.
             </p>
@@ -1395,79 +1448,200 @@ export default function App() {
               <X className="w-5 h-5" />
             </button>
 
-            <div className="flex items-center gap-3 mb-5">
+            <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-xl bg-[#272724] border border-[#383834] text-[#da7756] flex items-center justify-center">
                 <Sliders className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-base font-bold text-white">Assistant Preferences</h3>
-                <p className="text-xs text-neutral-400">Personalize model behavior and storage</p>
+                <h3 className="text-base font-bold text-white">NADHILI AI Settings</h3>
+                <p className="text-xs text-neutral-400">Server Engine, Database & Intelligence Preferences</p>
               </div>
             </div>
 
+            {/* Tab Navigation */}
+            <div className="flex bg-[#232320] p-1 rounded-xl mb-4 border border-[#33332e] text-xs">
+              <button
+                type="button"
+                onClick={() => setSettingsTab('ai')}
+                className={`flex-1 py-1.5 rounded-lg font-medium transition ${
+                  settingsTab === 'ai' ? 'bg-[#da7756] text-white shadow-sm' : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                AI Engine
+              </button>
+              <button
+                type="button"
+                onClick={() => setSettingsTab('database')}
+                className={`flex-1 py-1.5 rounded-lg font-medium transition ${
+                  settingsTab === 'database' ? 'bg-[#da7756] text-white shadow-sm' : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                Database
+              </button>
+              <button
+                type="button"
+                onClick={() => setSettingsTab('persona')}
+                className={`flex-1 py-1.5 rounded-lg font-medium transition ${
+                  settingsTab === 'persona' ? 'bg-[#da7756] text-white shadow-sm' : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                Preferences
+              </button>
+            </div>
+
             <div className="space-y-4">
-              {/* Storage Status (Clean, no secret strings) */}
-              <div className="bg-[#222220] border border-[#33332f] rounded-2xl p-3.5">
-                <div className="flex items-center justify-between text-xs mb-1">
-                  <span className="text-neutral-400">Data Persistence:</span>
-                  <span className="font-semibold text-emerald-400 flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    Cloud Active & Synced
-                  </span>
-                </div>
-                <p className="text-[11px] text-neutral-400">
-                  Your conversations and multi-turn message history are stored securely and synchronized across sessions.
-                </p>
-              </div>
+              {/* TAB 1: AI Engine & Provider Preference */}
+              {settingsTab === 'ai' && (
+                <div className="space-y-3.5">
+                  <div>
+                    <label className="block text-xs font-semibold text-neutral-300 mb-1.5">
+                      Preferred AI Engine
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { id: 'auto', label: 'Auto Engine', desc: 'Fastest available' },
+                        { id: 'groq', label: 'Groq Cloud', desc: '300+ tok/s (LLaMA)' },
+                        { id: 'openrouter', label: 'OpenRouter', desc: 'DeepSeek / Multi' },
+                      ].map((prov) => (
+                        <button
+                          key={prov.id}
+                          type="button"
+                          onClick={() => handleSelectAiProvider(prov.id as any)}
+                          className={`p-2.5 rounded-xl border text-left transition ${
+                            aiProvider === prov.id
+                              ? 'bg-[#da7756]/15 border-[#da7756] text-white shadow-sm'
+                              : 'bg-[#222220] border-[#33332f] text-neutral-400 hover:text-white'
+                          }`}
+                        >
+                          <p className="text-xs font-semibold flex items-center justify-between">
+                            {prov.label}
+                            {aiProvider === prov.id && <span className="w-1.5 h-1.5 rounded-full bg-[#da7756]" />}
+                          </p>
+                          <p className="text-[10px] text-neutral-500 mt-0.5">{prov.desc}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
 
-              {/* Creativity / Tone */}
-              <div>
-                <label className="block text-xs font-semibold text-neutral-300 mb-2">Response Style</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { id: 'precise', label: 'Precise', desc: 'Concise & code' },
-                    { id: 'balanced', label: 'Balanced', desc: 'Everyday standard' },
-                    { id: 'creative', label: 'Creative', desc: 'Exploratory' },
-                  ].map((lvl) => (
-                    <button
-                      key={lvl.id}
-                      type="button"
-                      onClick={() => setCreativityLevel(lvl.id as any)}
-                      className={`p-2.5 rounded-xl border text-left transition ${
-                        creativityLevel === lvl.id
-                          ? 'bg-[#da7756]/15 border-[#da7756] text-white'
-                          : 'bg-[#222220] border-[#33332f] text-neutral-400 hover:text-white'
-                      }`}
+                  <div className="bg-[#222220] border border-[#33332f] rounded-2xl p-3.5 space-y-2.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-neutral-200 font-semibold flex items-center gap-1.5">
+                        <Cpu className="w-4 h-4 text-[#da7756]" />
+                        Server Environment API
+                      </span>
+                      <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">
+                        Active & Protected
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-neutral-400 leading-relaxed">
+                      API keys are loaded directly from server environment variables (<code className="text-[#da7756] bg-black/40 px-1 py-0.5 rounded font-mono text-[10px]">GROQ_API_KEY</code>, <code className="text-[#da7756] bg-black/40 px-1 py-0.5 rounded font-mono text-[10px]">OPENROUTER_API_KEY</code>). All website visitors chat seamlessly with zero client-side key exposure.
+                    </p>
+                    <div className="pt-2 border-t border-[#2e2e2a] flex items-center justify-between text-[10px] text-neutral-400">
+                      <span>Engine: Groq LLaMA 3.3 70B & OpenRouter</span>
+                      <span className="text-emerald-400 flex items-center gap-1 font-medium">
+                        <ShieldCheck className="w-3 h-3" />
+                        Multi-user Secure
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 2: Database Storage & Memory */}
+              {settingsTab === 'database' && (
+                <div className="space-y-3.5">
+                  <div className="bg-[#222220] border border-[#33332f] rounded-2xl p-3.5">
+                    <div className="flex items-center justify-between text-xs mb-1.5">
+                      <span className="text-neutral-200 font-semibold flex items-center gap-1.5">
+                        <Database className="w-4 h-4 text-[#da7756]" />
+                        Database Memory Status
+                      </span>
+                      <span
+                        className={`font-semibold text-xs flex items-center gap-1.5 ${
+                          dbStatus.connected ? 'text-emerald-400' : 'text-neutral-300'
+                        }`}
+                      >
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            dbStatus.connected ? 'bg-emerald-400 animate-pulse' : 'bg-emerald-400'
+                          }`}
+                        />
+                        {dbStatus.provider}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-neutral-400 leading-relaxed">
+                      {dbStatus.connected
+                        ? 'All conversations, user messages, and AI memories are persisted securely in your PostgreSQL database configured on the backend server.'
+                        : 'Your chat messages are stored securely. When DATABASE_URL is set in your server environment, data automatically persists across all your devices.'}
+                    </p>
+                  </div>
+
+                  <div className="bg-[#1e1e1c] border border-[#2e2e2a] rounded-xl p-3 text-[11px] text-neutral-400 space-y-1.5">
+                    <p className="font-semibold text-neutral-200 text-xs flex items-center gap-1.5">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                      Multi-User Data Security
+                    </p>
+                    <p className="leading-relaxed">
+                      Your database connection string is stored safely in your server environment (<code className="text-[#da7756] bg-black/40 px-1 py-0.5 rounded font-mono text-[10px]">DATABASE_URL</code>).
+                      It is never sent to the browser or visible to website visitors.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 3: Preferences & Persona */}
+              {settingsTab === 'persona' && (
+                <div className="space-y-3.5">
+                  <div>
+                    <label className="block text-xs font-semibold text-neutral-300 mb-2">Response Style</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { id: 'precise', label: 'Precise', desc: 'Concise & code' },
+                        { id: 'balanced', label: 'Balanced', desc: 'Everyday standard' },
+                        { id: 'creative', label: 'Creative', desc: 'Exploratory' },
+                      ].map((lvl) => (
+                        <button
+                          key={lvl.id}
+                          type="button"
+                          onClick={() => setCreativityLevel(lvl.id as any)}
+                          className={`p-2 rounded-xl border text-left transition ${
+                            creativityLevel === lvl.id
+                              ? 'bg-[#da7756]/15 border-[#da7756] text-white'
+                              : 'bg-[#222220] border-[#33332f] text-neutral-400 hover:text-white'
+                          }`}
+                        >
+                          <p className="text-xs font-medium">{lvl.label}</p>
+                          <p className="text-[10px] text-neutral-500 mt-0.5">{lvl.desc}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-neutral-300 mb-1.5">
+                      NADHILI Persona Focus
+                    </label>
+                    <select
+                      value={systemPersona}
+                      onChange={(e) => setSystemPersona(e.target.value)}
+                      className="w-full bg-[#222220] border border-[#33332f] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#da7756]"
                     >
-                      <p className="text-xs font-medium">{lvl.label}</p>
-                      <p className="text-[10px] text-neutral-500 mt-0.5">{lvl.desc}</p>
-                    </button>
-                  ))}
+                      <option value="default">General Intelligence (Default)</option>
+                      <option value="code">Senior Software Architect</option>
+                      <option value="research">Academic & Research Synthesizer</option>
+                      <option value="creative">Writer & Creative Partner</option>
+                    </select>
+                  </div>
                 </div>
-              </div>
-
-              {/* System Persona */}
-              <div>
-                <label className="block text-xs font-semibold text-neutral-300 mb-1.5">Claude Persona Focus</label>
-                <select
-                  value={systemPersona}
-                  onChange={(e) => setSystemPersona(e.target.value)}
-                  className="w-full bg-[#222220] border border-[#33332f] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#da7756]"
-                >
-                  <option value="default">General Intelligence (Default)</option>
-                  <option value="code">Senior Software Architect</option>
-                  <option value="research">Academic & Research Synthesizer</option>
-                  <option value="creative">Writer & Creative Partner</option>
-                </select>
-              </div>
+              )}
             </div>
 
             <button
               onClick={() => {
-                showToast('Preferences saved');
+                showToast('Settings saved');
                 setSettingsModalOpen(false);
               }}
-              className="mt-6 w-full bg-[#da7756] hover:bg-[#eb947a] text-white font-medium py-2.5 rounded-xl text-xs transition"
+              className="mt-6 w-full bg-[#272724] hover:bg-[#333330] text-neutral-200 border border-[#383834] font-medium py-2 rounded-xl text-xs transition"
             >
               Done
             </button>
@@ -1491,7 +1665,7 @@ export default function App() {
             </div>
 
             <h3 className="text-lg font-bold text-center text-white mb-1">
-              {authTab === 'signin' ? 'Sign in to Claude' : 'Create Claude Account'}
+              {authTab === 'signin' ? 'Sign in to NADHILI AI' : 'Create NADHILI AI Account'}
             </h3>
             <p className="text-xs text-center text-neutral-400 mb-5">
               Sync multi-turn conversations and access advanced models.

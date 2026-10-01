@@ -88,7 +88,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
   return (
     <div
       ref={containerRef}
-      className={`prose-claude text-[0.935rem] leading-relaxed ${className}`}
+      className={`prose-nadhili text-[0.935rem] leading-relaxed ${className}`}
       dangerouslySetInnerHTML={{ __html: htmlContent }}
     />
   );

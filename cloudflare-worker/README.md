@@ -1,6 +1,6 @@
 # NADHILI AI - Production Cloudflare Worker Deployment
 
-NADHILI AI is a Claude-level AI chat application completely powered by Cloudflare Workers, Cloudflare D1 (SQLite), and Groq's `llama-3.3-70b-versatile` model.
+NADHILI AI is a powerful AI chat application completely powered by Cloudflare Workers, Cloudflare D1 (SQLite), and Groq's `llama-3.3-70b-versatile` model.
 
 ## Quick Start (Deploy in 3 minutes)
 
@@ -48,4 +48,4 @@ Your NADHILI AI site is now live globally on Cloudflare's edge network!
 - **Auth**: Sign up, Sign in, Guest mode, JWT with HMAC-SHA256, crypto password hashing.
 - **Database**: Cloudflare D1 for full user profiles, conversation memory, and message histories.
 - **AI Streaming**: Real-time SSE streaming from Groq `llama-3.3-70b-versatile`.
-- **UI**: Claude dark theme (`#0a0a0a`, `#111111`, `#f5a623`), Markdown tables/code blocks, syntax highlighting, voice input, image vision support, and PDF/text export.
+- **UI**: NADHILI dark theme (`#0a0a0a`, `#111111`, `#f5a623`), Markdown tables/code blocks, syntax highlighting, voice input, image vision support, and PDF/text export.
