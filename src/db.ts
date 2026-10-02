@@ -610,6 +610,22 @@ class DatabaseManager {
     this.saveLocal();
     return msg;
   }
+
+  async deleteMessage(messageId: string): Promise<boolean> {
+    if (this.dbConnected) {
+      try {
+        await this.executeQuery(`DELETE FROM messages WHERE id = $1;`, [messageId]);
+      } catch (err) {
+        console.error('Database deleteMessage error:', err);
+      }
+    }
+    const idx = this.localData.messages.findIndex((m) => m.id === messageId);
+    if (idx !== -1) {
+      this.localData.messages.splice(idx, 1);
+      this.saveLocal();
+    }
+    return true;
+  }
 }
 
 export const db = new DatabaseManager();

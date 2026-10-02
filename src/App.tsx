@@ -31,6 +31,9 @@ import {
   ShieldCheck,
   Zap,
   Cpu,
+  Share2,
+  Palette,
+  Maximize2,
 } from 'lucide-react';
 import { MarkdownRenderer } from './components/MarkdownRenderer';
 
@@ -49,6 +52,9 @@ interface ChatMessage {
   content: string;
   attachments?: AttachedFile[];
   image?: string | null;
+  generatedImage?: string | null;
+  imagePrompt?: string;
+  isImageLoading?: boolean;
   created_at?: number;
 }
 
@@ -75,6 +81,7 @@ interface ModelOption {
   badge?: string;
   description: string;
   highlight?: boolean;
+  isImageGen?: boolean;
 }
 
 const MODELS: ModelOption[] = [
@@ -87,11 +94,13 @@ const MODELS: ModelOption[] = [
     highlight: true,
   },
   {
-    id: 'nadhili-3-7-reasoning',
-    name: 'NADHILI 3.7 Reasoning',
-    tag: 'Hybrid',
-    badge: 'Smart',
-    description: 'Hybrid reasoning • Code intelligence & extended thinking',
+    id: 'nadhili-iglam',
+    name: 'NADHILI IGLAM',
+    tag: 'Ideogram AI',
+    badge: 'Image Gen',
+    description: 'Create photorealistic AI images like ChatGPT with download, share & edit',
+    highlight: true,
+    isImageGen: true,
   },
   {
     id: 'nadhili-r1-deep',
@@ -177,6 +186,7 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<{ url: string; prompt?: string } | null>(null);
 
   // Refs
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -305,6 +315,86 @@ export default function App() {
     } catch {
       showToast('Failed to delete');
     }
+  };
+
+  // --- INDIVIDUAL MESSAGE DELETION ---
+  const handleDeleteMessage = async (indexToDelete: number) => {
+    const msg = messages[indexToDelete];
+    setMessages((prev) => prev.filter((_, idx) => idx !== indexToDelete));
+    showToast('Message deleted');
+
+    if (msg?.id && token) {
+      try {
+        await fetch(`/api/messages/${msg.id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch {
+        // Local state already updated
+      }
+    }
+  };
+
+  // --- NADHILI IGLAM IMAGE ACTIONS ---
+  const downloadImage = (dataUrl: string, filename = 'nadhili-iglam.png') => {
+    try {
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      showToast('Image downloaded!');
+    } catch {
+      showToast('Download started');
+    }
+  };
+
+  const shareImage = async (dataUrl: string, promptText: string) => {
+    try {
+      if (navigator.share) {
+        if (dataUrl.startsWith('data:image')) {
+          const res = await fetch(dataUrl);
+          const blob = await res.blob();
+          const file = new File([blob], 'nadhili-iglam.png', { type: blob.type });
+          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({
+              title: 'NADHILI IGLAM Image',
+              text: promptText,
+              files: [file],
+            });
+            showToast('Image shared!');
+            return;
+          }
+        }
+        await navigator.share({
+          title: 'NADHILI IGLAM Image',
+          text: `Created with NADHILI IGLAM: "${promptText}"`,
+          url: window.location.href,
+        });
+        showToast('Shared successfully!');
+        return;
+      }
+    } catch (e: any) {
+      if (e.name === 'AbortError') return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(`Created with NADHILI IGLAM: "${promptText}"`);
+      showToast('Image prompt copied to clipboard!');
+    } catch {
+      showToast('Prompt ready to share');
+    }
+  };
+
+  const handleEditPrompt = (promptText: string) => {
+    setSelectedModel('nadhili-iglam');
+    setInputPrompt(promptText);
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+      textareaRef.current.style.height = 'auto';
+    }
+    showToast('Prompt loaded in editor');
   };
 
   // --- AUTH HANDLERS ---
@@ -485,7 +575,78 @@ export default function App() {
       chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: 'smooth' });
     }, 50);
 
-    // Empty assistant placeholder for streaming
+    // If NADHILI IGLAM model is chosen, generate image via secure server endpoint
+    if (selectedModel === 'nadhili-iglam') {
+      const assistantPlaceholder: ChatMessage = {
+        role: 'assistant',
+        content: `🎨 NADHILI IGLAM is creating your image for: "${promptToSend}"...`,
+        imagePrompt: promptToSend,
+        isImageLoading: true,
+        created_at: Math.floor(Date.now() / 1000),
+      };
+      setMessages([...newMessages, assistantPlaceholder]);
+      abortControllerRef.current = new AbortController();
+
+      try {
+        const res = await fetch('/api/generate-image', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            prompt: promptToSend,
+            conversationId: currentConversationId,
+          }),
+          signal: abortControllerRef.current.signal,
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'Failed to generate image with NADHILI IGLAM');
+        }
+
+        if (data.conversationId && (!currentConversationId || currentConversationId !== data.conversationId)) {
+          setCurrentConversationId(data.conversationId);
+          fetchConversations();
+        }
+
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastIdx = updated.length - 1;
+          updated[lastIdx] = {
+            id: data.assistantMessageId,
+            role: 'assistant',
+            content: `Here is your generated image with **NADHILI IGLAM** for:\n\n> "${data.prompt}"`,
+            generatedImage: data.imageUrl,
+            imagePrompt: data.prompt,
+            isImageLoading: false,
+            created_at: Math.floor(Date.now() / 1000),
+          };
+          return updated;
+        });
+        showToast('Image generated with NADHILI IGLAM!');
+      } catch (err: any) {
+        if (err.name === 'AbortError') return;
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastIdx = updated.length - 1;
+          updated[lastIdx] = {
+            role: 'assistant',
+            content: `⚠️ Failed to generate image with NADHILI IGLAM: ${err.message || 'Please try again.'}`,
+            isImageLoading: false,
+            created_at: Math.floor(Date.now() / 1000),
+          };
+          return updated;
+        });
+        showToast(err.message || 'Image generation failed');
+      } finally {
+        setIsGenerating(false);
+      }
+      return;
+    }
+
+    // Empty assistant placeholder for text streaming
     const assistantIndex = newMessages.length;
     setMessages([...newMessages, { role: 'assistant', content: '', created_at: Math.floor(Date.now() / 1000) }]);
 
@@ -1078,7 +1239,7 @@ export default function App() {
 
                         <div className="whitespace-pre-wrap leading-relaxed">{msg.content}</div>
 
-                        <div className="flex items-center justify-end gap-2 mt-2 pt-1 border-t border-[#2d2d2a] opacity-0 group-hover:opacity-100 transition text-[11px] text-neutral-400">
+                        <div className="flex items-center justify-end gap-2.5 mt-2 pt-1 border-t border-[#2d2d2a] opacity-0 group-hover:opacity-100 transition text-[11px] text-neutral-400">
                           <button
                             onClick={() => handleEditMessage(index)}
                             title="Edit prompt"
@@ -1099,11 +1260,24 @@ export default function App() {
                             )}
                             <span>Copy</span>
                           </button>
+                          <button
+                            onClick={() => handleDeleteMessage(index)}
+                            title="Delete message from chat"
+                            className="hover:text-red-400 flex items-center gap-1 transition"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete</span>
+                          </button>
                         </div>
                       </div>
                     </div>
                   );
                 }
+
+                const displayImg = msg.generatedImage || (msg.content?.match(/!\[.*?\]\((data:image\/[a-zA-Z+]+;base64,[^\s\)]+|https?:\/\/[^\s\)]+)\)/)?.[1]);
+                const cleanedContent = displayImg
+                  ? msg.content.replace(/!\[.*?\]\((data:image\/[a-zA-Z+]+;base64,[^\s\)]+|https?:\/\/[^\s\)]+)\)/g, '').trim()
+                  : msg.content;
 
                 return (
                   <div key={index} className="flex gap-3.5 group">
@@ -1113,23 +1287,96 @@ export default function App() {
                     <div className="flex-1 max-w-[90%] min-w-0">
                       <div className="text-xs font-semibold text-neutral-300 mb-1 flex items-center gap-2">
                         <span>NADHILI AI</span>
-                        <span className="text-[10px] text-neutral-500 font-normal font-mono">{activeModelObj.name}</span>
+                        <span className="text-[10px] text-neutral-500 font-normal font-mono">
+                          {msg.generatedImage || msg.isImageLoading ? 'NADHILI IGLAM' : activeModelObj.name}
+                        </span>
                       </div>
 
                       {/* Content or Streaming Dots */}
-                      {isLastAssistant && !msg.content ? (
+                      {isLastAssistant && !msg.content && !msg.isImageLoading ? (
                         <div className="flex items-center gap-2 py-2 text-[#da7756]">
                           <span className="w-2 h-2 rounded-full bg-[#da7756] animate-bounce [animation-delay:-0.3s]" />
                           <span className="w-2 h-2 rounded-full bg-[#da7756] animate-bounce [animation-delay:-0.15s]" />
                           <span className="w-2 h-2 rounded-full bg-[#da7756] animate-bounce" />
                           <span className="text-xs text-neutral-400 font-mono ml-2">Thinking...</span>
                         </div>
-                      ) : (
-                        <MarkdownRenderer content={msg.content} />
+                      ) : null}
+
+                      {/* NADHILI IGLAM Loading Card */}
+                      {msg.isImageLoading && (
+                        <div className="my-3 p-5 rounded-2xl border border-[#383834] bg-[#1a1a18] max-w-md flex flex-col items-center text-center space-y-3 shadow-lg">
+                          <div className="w-12 h-12 rounded-2xl bg-[#da7756]/15 border border-[#da7756]/30 flex items-center justify-center text-[#da7756]">
+                            <Palette className="w-6 h-6 animate-pulse" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-semibold text-white">NADHILI IGLAM is creating your image...</p>
+                            <p className="text-[11px] text-neutral-400 mt-1 max-w-xs truncate">
+                              "{msg.imagePrompt}"
+                            </p>
+                          </div>
+                          <div className="w-full bg-[#272724] rounded-full h-1.5 overflow-hidden">
+                            <div className="bg-gradient-to-r from-[#da7756] to-[#eb947a] h-full w-2/3 animate-pulse" />
+                          </div>
+                        </div>
                       )}
 
-                      {/* Actions */}
-                      {!isLastAssistant && (
+                      {/* Clean Text Description if available */}
+                      {cleanedContent ? (
+                        <MarkdownRenderer content={cleanedContent} />
+                      ) : null}
+
+                      {/* NADHILI IGLAM Generated Image Display with Download, Share, Edit */}
+                      {displayImg && (
+                        <div className="my-3 group/img relative max-w-lg">
+                          <div
+                            onClick={() => setLightboxImage({ url: displayImg, prompt: msg.imagePrompt })}
+                            className="relative overflow-hidden rounded-2xl border border-[#383834] bg-black/40 cursor-zoom-in shadow-xl hover:border-[#da7756]/60 transition"
+                          >
+                            <img
+                              src={displayImg}
+                              alt={msg.imagePrompt || 'NADHILI IGLAM Generated Image'}
+                              className="w-full h-auto max-h-[460px] object-cover rounded-2xl transition duration-300 group-hover/img:scale-[1.01]"
+                            />
+                            <div className="absolute top-3 right-3 bg-black/70 backdrop-blur-md text-white text-[11px] px-2.5 py-1 rounded-full border border-white/10 opacity-0 group-hover/img:opacity-100 transition flex items-center gap-1.5 pointer-events-none">
+                              <Maximize2 className="w-3 h-3 text-[#da7756]" />
+                              <span>Click to expand</span>
+                            </div>
+                          </div>
+
+                          {/* Action Buttons: Download, Share, Edit */}
+                          <div className="flex flex-wrap items-center gap-2 mt-2.5">
+                            <button
+                              onClick={() => downloadImage(displayImg, `nadhili-iglam-${index}.png`)}
+                              title="Download high-resolution image"
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#222220] hover:bg-[#2c2c29] border border-[#33332f] hover:border-[#da7756]/50 text-neutral-200 text-xs font-medium transition shadow-sm"
+                            >
+                              <Download className="w-3.5 h-3.5 text-[#da7756]" />
+                              <span>Download</span>
+                            </button>
+
+                            <button
+                              onClick={() => shareImage(displayImg, msg.imagePrompt || msg.content)}
+                              title="Share this image"
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#222220] hover:bg-[#2c2c29] border border-[#33332f] hover:border-sky-500/50 text-neutral-200 text-xs font-medium transition shadow-sm"
+                            >
+                              <Share2 className="w-3.5 h-3.5 text-sky-400" />
+                              <span>Share</span>
+                            </button>
+
+                            <button
+                              onClick={() => handleEditPrompt(msg.imagePrompt || msg.content)}
+                              title="Edit and iterate on prompt"
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#222220] hover:bg-[#2c2c29] border border-[#33332f] hover:border-amber-500/50 text-neutral-200 text-xs font-medium transition shadow-sm"
+                            >
+                              <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+                              <span>Edit</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Actions row below message */}
+                      {!isLastAssistant && !msg.isImageLoading && (
                         <div className="flex items-center gap-3 mt-3 text-xs text-neutral-400 opacity-0 group-hover:opacity-100 transition">
                           <button
                             onClick={() => copyText(msg.content, `msg-${index}`)}
@@ -1142,12 +1389,22 @@ export default function App() {
                             )}
                             <span>Copy</span>
                           </button>
+                          {!displayImg && (
+                            <button
+                              onClick={() => handleRegenerate(index)}
+                              className="hover:text-[#da7756] flex items-center gap-1 transition"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              <span>Regenerate</span>
+                            </button>
+                          )}
                           <button
-                            onClick={() => handleRegenerate(index)}
-                            className="hover:text-[#da7756] flex items-center gap-1 transition"
+                            onClick={() => handleDeleteMessage(index)}
+                            title="Delete message from chat"
+                            className="hover:text-red-400 flex items-center gap-1 transition"
                           >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                            <span>Regenerate</span>
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete</span>
                           </button>
                         </div>
                       )}
@@ -1527,17 +1784,17 @@ export default function App() {
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-neutral-200 font-semibold flex items-center gap-1.5">
                         <Cpu className="w-4 h-4 text-[#da7756]" />
-                        Server Environment API
+                        Server Environment Integration
                       </span>
                       <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">
                         Active & Protected
                       </span>
                     </div>
                     <p className="text-[11px] text-neutral-400 leading-relaxed">
-                      API keys are loaded directly from server environment variables (<code className="text-[#da7756] bg-black/40 px-1 py-0.5 rounded font-mono text-[10px]">GROQ_API_KEY</code>, <code className="text-[#da7756] bg-black/40 px-1 py-0.5 rounded font-mono text-[10px]">OPENROUTER_API_KEY</code>). All website visitors chat seamlessly with zero client-side key exposure.
+                      AI language models, NADHILI IGLAM image generation, and database memory run seamlessly through the secure backend server. Visitors and team members chat and create with maximum privacy and security.
                     </p>
                     <div className="pt-2 border-t border-[#2e2e2a] flex items-center justify-between text-[10px] text-neutral-400">
-                      <span>Engine: Groq LLaMA 3.3 70B & OpenRouter</span>
+                      <span>Engine: Reasoning & Image Generation</span>
                       <span className="text-emerald-400 flex items-center gap-1 font-medium">
                         <ShieldCheck className="w-3 h-3" />
                         Multi-user Secure
@@ -1861,6 +2118,65 @@ export default function App() {
                   </pre>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- IMAGE LIGHTBOX MODAL --- */}
+      {lightboxImage && (
+        <div
+          onClick={() => setLightboxImage(null)}
+          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative max-w-4xl max-h-[92vh] flex flex-col items-center"
+          >
+            <button
+              onClick={() => setLightboxImage(null)}
+              className="absolute -top-12 right-0 text-neutral-400 hover:text-white p-2 rounded-full bg-[#1e1e1c] border border-[#333] transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <img
+              src={lightboxImage.url}
+              alt={lightboxImage.prompt || 'Generated image'}
+              className="max-h-[75vh] w-auto rounded-2xl object-contain shadow-2xl border border-[#333330]"
+            />
+
+            {lightboxImage.prompt && (
+              <p className="mt-3 text-xs text-neutral-300 bg-[#1e1e1c] border border-[#2e2e2a] px-4 py-2 rounded-xl max-w-xl text-center">
+                "{lightboxImage.prompt}"
+              </p>
+            )}
+
+            <div className="flex items-center gap-3 mt-3">
+              <button
+                onClick={() => downloadImage(lightboxImage.url, 'nadhili-iglam.png')}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#da7756] hover:bg-[#eb947a] text-white text-xs font-medium transition shadow-lg"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download</span>
+              </button>
+              <button
+                onClick={() => shareImage(lightboxImage.url, lightboxImage.prompt || '')}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#272724] hover:bg-[#333330] text-neutral-200 border border-[#383834] text-xs font-medium transition"
+              >
+                <Share2 className="w-4 h-4 text-sky-400" />
+                <span>Share</span>
+              </button>
+              <button
+                onClick={() => {
+                  if (lightboxImage.prompt) handleEditPrompt(lightboxImage.prompt);
+                  setLightboxImage(null);
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#272724] hover:bg-[#333330] text-neutral-200 border border-[#383834] text-xs font-medium transition"
+              >
+                <Edit3 className="w-4 h-4 text-amber-400" />
+                <span>Edit Prompt</span>
+              </button>
             </div>
           </div>
         </div>

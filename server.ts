@@ -180,6 +180,74 @@ app.delete('/api/conversations/:id', async (req: Request, res: Response) => {
   return res.json({ success: true });
 });
 
+// 6.1 Messages: Delete individual message
+app.delete('/api/messages/:id', async (req: Request, res: Response) => {
+  try {
+    await db.deleteMessage(req.params.id);
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 6.2 NADHILI IGLAM: AI Image Generation (Secure Server-side)
+app.post('/api/generate-image', async (req: Request, res: Response) => {
+  try {
+    const { prompt, conversationId } = req.body;
+    const auth = getAuthUser(req);
+
+    if (!prompt || !prompt.trim()) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+
+    const trimmedPrompt = prompt.trim();
+    const apiKey = process.env.IDEOGRAM_API_KEY || 'cmnty-c66d9057edf93387ea139e6343f81408';
+    const targetUrl = `https://api.cmnty.eu.cc/ai/ideogram?prompt=${encodeURIComponent(trimmedPrompt)}&apikey=${apiKey}`;
+
+    const apiRes = await fetch(targetUrl);
+    if (!apiRes.ok) {
+      throw new Error(`NADHILI IGLAM image generation failed with status ${apiRes.status}`);
+    }
+
+    const arrayBuffer = await apiRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const contentType = apiRes.headers.get('content-type') || 'image/png';
+    const base64Data = `data:${contentType};base64,${buffer.toString('base64')}`;
+
+    let activeConvId = conversationId;
+    let userMsgId: string | undefined;
+    let assistantMsgId: string | undefined;
+
+    if (auth) {
+      if (!activeConvId) {
+        const title = trimmedPrompt.length > 35 ? trimmedPrompt.slice(0, 35) + '...' : trimmedPrompt;
+        const newConv = await db.createConversation(auth.userId, `🎨 ${title}`);
+        activeConvId = newConv.id;
+      }
+      const userMsg = await db.addMessage(activeConvId, 'user', trimmedPrompt);
+      userMsgId = userMsg.id;
+      const assistantMsg = await db.addMessage(
+        activeConvId,
+        'assistant',
+        `Generated image with **NADHILI IGLAM** for: "${trimmedPrompt}"\n\n![NADHILI IGLAM Image](${base64Data})`
+      );
+      assistantMsgId = assistantMsg.id;
+    }
+
+    return res.json({
+      success: true,
+      imageUrl: base64Data,
+      prompt: trimmedPrompt,
+      conversationId: activeConvId,
+      userMessageId: userMsgId,
+      assistantMessageId: assistantMsgId,
+    });
+  } catch (err: any) {
+    console.error('NADHILI IGLAM generation error:', err);
+    return res.status(500).json({ error: err.message || 'Image generation failed' });
+  }
+});
+
 // 7. Cloudflare Deployment Bundle
 app.get('/api/cloudflare/files', (_req: Request, res: Response) => {
   try {
