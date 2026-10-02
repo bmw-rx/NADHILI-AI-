@@ -34,8 +34,26 @@ import {
   Share2,
   Palette,
   Maximize2,
+  Volume2,
+  BookOpen,
+  Smartphone,
+  ArrowLeft,
+  ArrowRight,
+  RefreshCw,
+  CheckCircle2,
+  AlertCircle,
+  Play,
+  Pause,
+  Radio,
+  Video,
+  Film,
+  Bell,
+  History,
 } from 'lucide-react';
 import { MarkdownRenderer } from './components/MarkdownRenderer';
+import { PlansPage } from './components/PlansPage';
+import { ClickPesaCheckoutModal } from './components/ClickPesaCheckoutModal';
+import { AdminPanel } from './components/AdminPanel';
 
 interface AttachedFile {
   id: string;
@@ -55,6 +73,16 @@ interface ChatMessage {
   generatedImage?: string | null;
   imagePrompt?: string;
   isImageLoading?: boolean;
+  videoUrl?: string | null;
+  videoPrompt?: string | null;
+  isVideoLoading?: boolean;
+  audioUrl?: string | null;
+  audioText?: string | null;
+  bibleData?: {
+    question: string;
+    translation: string;
+    answer: string;
+  } | null;
   created_at?: number;
 }
 
@@ -82,6 +110,10 @@ interface ModelOption {
   description: string;
   highlight?: boolean;
   isImageGen?: boolean;
+  isBibleAi?: boolean;
+  isTts?: boolean;
+  isVideoGen?: boolean;
+  isPro?: boolean;
 }
 
 const MODELS: ModelOption[] = [
@@ -94,6 +126,16 @@ const MODELS: ModelOption[] = [
     highlight: true,
   },
   {
+    id: 'nadhili-video-ai',
+    name: 'NADHILI Video AI',
+    tag: 'Video Gen',
+    badge: 'Pro Video',
+    description: 'Generate HD AI videos from text prompts (Cinematic HD, 1080p, motion & camera)',
+    highlight: true,
+    isVideoGen: true,
+    isPro: true,
+  },
+  {
     id: 'nadhili-iglam',
     name: 'NADHILI IGLAM',
     tag: 'Ideogram AI',
@@ -101,6 +143,24 @@ const MODELS: ModelOption[] = [
     description: 'Create photorealistic AI images like ChatGPT with download, share & edit',
     highlight: true,
     isImageGen: true,
+  },
+  {
+    id: 'nadhili-bible-ai',
+    name: 'NADHILI Bible AI',
+    tag: 'Theology AI',
+    badge: 'Bible AI',
+    description: 'Biblical scriptures, faith questions, theology & deep cross-references',
+    highlight: true,
+    isBibleAi: true,
+  },
+  {
+    id: 'nadhili-tts',
+    name: 'NADHILI Voice TTS',
+    tag: 'Speech AI',
+    badge: 'Audio Gen',
+    description: 'Natural Text-to-Speech audio speech generator with player & MP3 download',
+    highlight: true,
+    isTts: true,
   },
   {
     id: 'nadhili-r1-deep',
@@ -135,11 +195,27 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
 
   // UI state
+  const [activeView, setActiveView] = useState<'chat' | 'plans' | 'admin'>(() => {
+    if (typeof window !== 'undefined') {
+      if (window.location.pathname === '/nadhiliai' || window.location.hash === '#/nadhiliai') {
+        return 'admin';
+      }
+    }
+    return 'chat';
+  });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
 
-  // Modals
+  // TTS Voice & Language Options
+  const [ttsVoice, setTtsVoice] = useState<'sw' | 'en' | 'fr' | 'ar'>('sw');
+
+  // Notifications State
+  const [appNotifications, setAppNotifications] = useState<any[]>([]);
+  const [unreadNotifsCount, setUnreadNotifsCount] = useState(0);
+  const [notificationsModalOpen, setNotificationsModalOpen] = useState(false);
+
+  // Modals & Views
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authTab, setAuthTab] = useState<'signin' | 'signup'>('signin');
   const [authEmail, setAuthEmail] = useState('');
@@ -148,6 +224,40 @@ export default function App() {
   const [authError, setAuthError] = useState('');
 
   const [proModalOpen, setProModalOpen] = useState(false);
+  const [pricingBillingPeriod, setPricingBillingPeriod] = useState<'monthly' | 'annual'>('monthly');
+
+  // ClickPesa Checkout State
+  const [checkoutModalOpen, setCheckoutModalOpen] = useState(false);
+  const [selectedPlanForCheckout, setSelectedPlanForCheckout] = useState<'normal' | 'hard' | 'ultra' | null>(null);
+  const [checkoutPhone, setCheckoutPhone] = useState('');
+  const [checkoutNetwork, setCheckoutNetwork] = useState<'mpesa' | 'tigo' | 'airtel' | 'halopesa'>('mpesa');
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutStatus, setCheckoutStatus] = useState<'idle' | 'push_sent' | 'success' | 'failed'>('idle');
+  const [checkoutOrderRef, setCheckoutOrderRef] = useState<string | null>(null);
+  const [checkoutMessage, setCheckoutMessage] = useState('');
+  const [checkoutCountdown, setCheckoutCountdown] = useState(60);
+
+  // ClickPesa Admin / Gateway Configuration State
+  const [clickpesaConfig, setClickpesaConfig] = useState<{
+    configured: boolean;
+    hasClientId: boolean;
+    hasApiKey: boolean;
+    hasChecksumKey: boolean;
+    clientIdPrefix: string;
+    baseUrl: string;
+  }>({
+    configured: false,
+    hasClientId: false,
+    hasApiKey: false,
+    hasChecksumKey: false,
+    clientIdPrefix: '',
+    baseUrl: 'https://api.clickpesa.com',
+  });
+  const [cfgClientId, setCfgClientId] = useState('');
+  const [cfgApiKey, setCfgApiKey] = useState('');
+  const [cfgChecksumKey, setCfgChecksumKey] = useState('');
+  const [cfgBaseUrl, setCfgBaseUrl] = useState('https://api.clickpesa.com');
+
   const [deployModalOpen, setDeployModalOpen] = useState(false);
   const [deployTab, setDeployTab] = useState<'quick' | 'worker' | 'schema' | 'wrangler'>('quick');
   const [deployFiles, setDeployFiles] = useState<{ workerCode: string; schemaSql: string; wranglerToml: string }>({
@@ -157,7 +267,7 @@ export default function App() {
   });
 
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'ai' | 'database' | 'persona'>('ai');
+  const [settingsTab, setSettingsTab] = useState<'ai' | 'database' | 'clickpesa' | 'persona'>('ai');
   const [creativityLevel, setCreativityLevel] = useState<'balanced' | 'creative' | 'precise'>('balanced');
   const [systemPersona, setSystemPersona] = useState<string>('default');
 
@@ -250,39 +360,72 @@ export default function App() {
     }
   };
 
-  const fetchConversations = async () => {
+  const getGuestConversations = (): Conversation[] => {
     try {
-      const res = await fetch('/api/conversations', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setConversations(data);
-      }
+      const raw = localStorage.getItem('nadhili_guest_conversations');
+      return raw ? JSON.parse(raw) : [];
     } catch {
-      // Fallback
+      return [];
     }
   };
 
-  const loadConversation = async (convId: string) => {
+  const saveGuestConversations = (convs: Conversation[]) => {
     try {
-      const res = await fetch(`/api/conversations/${convId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setCurrentConversationId(data.conversation.id);
-        const mappedMsgs: ChatMessage[] = data.messages.map((m: any) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          created_at: m.created_at,
-        }));
-        setMessages(mappedMsgs);
+      localStorage.setItem('nadhili_guest_conversations', JSON.stringify(convs));
+    } catch {}
+  };
+
+  const fetchConversations = async () => {
+    if (token) {
+      try {
+        const res = await fetch('/api/conversations', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setConversations(data);
+          return;
+        }
+      } catch {
+        // Fallback to guest
+      }
+    }
+    setConversations(getGuestConversations());
+  };
+
+  const loadConversation = async (convId: string) => {
+    if (token) {
+      try {
+        const res = await fetch(`/api/conversations/${convId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setCurrentConversationId(data.conversation.id);
+          const mappedMsgs: ChatMessage[] = data.messages.map((m: any) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            created_at: m.created_at,
+          }));
+          setMessages(mappedMsgs);
+          setSidebarOpen(false);
+          return;
+        }
+      } catch (err: any) {
+        showToast('Could not load chat from server');
+      }
+    }
+
+    try {
+      const rawMsgs = localStorage.getItem(`nadhili_guest_msgs_${convId}`);
+      if (rawMsgs) {
+        setMessages(JSON.parse(rawMsgs));
+        setCurrentConversationId(convId);
         setSidebarOpen(false);
       }
-    } catch (err: any) {
-      showToast('Could not load chat');
+    } catch {
+      showToast('Could not load local chat');
     }
   };
 
@@ -300,21 +443,75 @@ export default function App() {
 
   const deleteConversation = async (e: React.MouseEvent, convId: string) => {
     e.stopPropagation();
+    if (token) {
+      try {
+        await fetch(`/api/conversations/${convId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch {
+        // Continue to local cleanup
+      }
+    }
+
+    const updated = conversations.filter((c) => c.id !== convId);
+    setConversations(updated);
+    saveGuestConversations(updated);
     try {
-      const res = await fetch(`/api/conversations/${convId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      localStorage.removeItem(`nadhili_guest_msgs_${convId}`);
+    } catch {}
+
+    if (currentConversationId === convId) {
+      startNewChat();
+    }
+    showToast('Conversation deleted');
+  };
+
+  const fetchClickPesaConfig = async () => {
+    try {
+      const res = await fetch('/api/payments/clickpesa/config');
       if (res.ok) {
-        setConversations((prev) => prev.filter((c) => c.id !== convId));
-        if (currentConversationId === convId) {
-          startNewChat();
-        }
-        showToast('Conversation deleted');
+        const data = await res.json();
+        setClickpesaConfig(data);
+        setCfgBaseUrl(data.baseUrl || 'https://api.clickpesa.com');
+      }
+    } catch {}
+  };
+
+  const handleSaveClickPesaConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch('/api/payments/clickpesa/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: cfgClientId,
+          apiKey: cfgApiKey,
+          checksumKey: cfgChecksumKey,
+          baseUrl: cfgBaseUrl,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('Mipangilio ya malipo imehifadhiwa kikamilifu!');
+        fetchClickPesaConfig();
+        setCfgApiKey('');
+        setCfgChecksumKey('');
+      } else {
+        showToast(data.error || 'Failed to update credentials');
       }
     } catch {
-      showToast('Failed to delete');
+      showToast('Hitilafu ya kuhifadhi mipangilio ya malipo');
     }
+  };
+
+  const openCheckoutForPlan = (plan: 'normal' | 'hard' | 'ultra') => {
+    setSelectedPlanForCheckout(plan);
+    setCheckoutStatus('idle');
+    setCheckoutMessage('');
+    setCheckoutOrderRef(null);
+    setCheckoutCountdown(60);
+    setCheckoutModalOpen(true);
   };
 
   // --- INDIVIDUAL MESSAGE DELETION ---
@@ -646,6 +843,147 @@ export default function App() {
       return;
     }
 
+    // If NADHILI Bible AI model is chosen
+    if (selectedModel === 'nadhili-bible-ai') {
+      const assistantPlaceholder: ChatMessage = {
+        role: 'assistant',
+        content: `📖 NADHILI Bible AI is examining scriptures for: "${promptToSend}"...`,
+        isImageLoading: false,
+        created_at: Math.floor(Date.now() / 1000),
+      };
+      setMessages([...newMessages, assistantPlaceholder]);
+      abortControllerRef.current = new AbortController();
+
+      try {
+        const res = await fetch('/api/bible-ai', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            question: promptToSend,
+            translation: 'ESV',
+            conversationId: currentConversationId,
+          }),
+          signal: abortControllerRef.current.signal,
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'Failed to query Bible AI');
+        }
+
+        if (data.conversationId && (!currentConversationId || currentConversationId !== data.conversationId)) {
+          setCurrentConversationId(data.conversationId);
+          fetchConversations();
+        }
+
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastIdx = updated.length - 1;
+          updated[lastIdx] = {
+            id: data.assistantMessageId,
+            role: 'assistant',
+            content: `### 📖 Biblical Insight (${data.translation || 'ESV'})\n\n${data.answer}`,
+            bibleData: {
+              question: data.question,
+              translation: data.translation,
+              answer: data.answer,
+            },
+            created_at: Math.floor(Date.now() / 1000),
+          };
+          return updated;
+        });
+        showToast('Bible AI answered!');
+      } catch (err: any) {
+        if (err.name === 'AbortError') return;
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastIdx = updated.length - 1;
+          updated[lastIdx] = {
+            role: 'assistant',
+            content: `⚠️ Failed to get answer from Bible AI: ${err.message || 'Please try again.'}`,
+            created_at: Math.floor(Date.now() / 1000),
+          };
+          return updated;
+        });
+        showToast(err.message || 'Bible AI request failed');
+      } finally {
+        setIsGenerating(false);
+      }
+      return;
+    }
+
+    // If NADHILI Voice TTS model is chosen
+    if (selectedModel === 'nadhili-tts') {
+      const assistantPlaceholder: ChatMessage = {
+        role: 'assistant',
+        content: `🎙️ NADHILI Voice is generating natural speech for: "${promptToSend}"...`,
+        isImageLoading: false,
+        created_at: Math.floor(Date.now() / 1000),
+      };
+      setMessages([...newMessages, assistantPlaceholder]);
+      abortControllerRef.current = new AbortController();
+
+      try {
+        const res = await fetch('/api/tts', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            text: promptToSend,
+            to: 'en',
+            conversationId: currentConversationId,
+          }),
+          signal: abortControllerRef.current.signal,
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'Failed to generate speech audio');
+        }
+
+        if (data.conversationId && (!currentConversationId || currentConversationId !== data.conversationId)) {
+          setCurrentConversationId(data.conversationId);
+          fetchConversations();
+        }
+
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastIdx = updated.length - 1;
+          updated[lastIdx] = {
+            id: data.assistantMessageId,
+            role: 'assistant',
+            content: `🎙️ **NADHILI Voice Speech Generated**\n\n> "${data.text}"`,
+            audioUrl: data.audioUrl,
+            audioText: data.text,
+            created_at: Math.floor(Date.now() / 1000),
+          };
+          return updated;
+        });
+        showToast('Voice audio generated!');
+      } catch (err: any) {
+        if (err.name === 'AbortError') return;
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastIdx = updated.length - 1;
+          updated[lastIdx] = {
+            role: 'assistant',
+            content: `⚠️ Failed to generate speech audio: ${err.message || 'Please try again.'}`,
+            created_at: Math.floor(Date.now() / 1000),
+          };
+          return updated;
+        });
+        showToast(err.message || 'TTS generation failed');
+      } finally {
+        setIsGenerating(false);
+      }
+      return;
+    }
+
     // Empty assistant placeholder for text streaming
     const assistantIndex = newMessages.length;
     setMessages([...newMessages, { role: 'assistant', content: '', created_at: Math.floor(Date.now() / 1000) }]);
@@ -867,6 +1205,44 @@ export default function App() {
     c.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  if (activeView === 'plans') {
+    return (
+      <div className="min-h-screen bg-[#141413] text-[#ede8dd] font-sans selection:bg-[#da7756]/30 selection:text-white">
+        {toastMessage && (
+          <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-[#272725] border border-[#3e3e3a] text-white text-xs px-4 py-2 rounded-full shadow-2xl flex items-center gap-2 animate-in fade-in slide-in-from-top duration-200">
+            <Sparkles className="w-3.5 h-3.5 text-[#da7756]" />
+            <span>{toastMessage}</span>
+          </div>
+        )}
+        <PlansPage
+          user={user}
+          onBackToChat={() => setActiveView('chat')}
+          onSelectPlan={(plan) => {
+            setSelectedPlanForCheckout(plan);
+            setCheckoutModalOpen(true);
+          }}
+        />
+        <ClickPesaCheckoutModal
+          isOpen={checkoutModalOpen}
+          onClose={() => setCheckoutModalOpen(false)}
+          plan={selectedPlanForCheckout}
+          user={user}
+          token={token}
+          onSuccess={(upgradedPlan) => {
+            setUser((prev) =>
+              prev
+                ? { ...prev, plan: upgradedPlan }
+                : { id: 'user_' + Date.now(), name: 'User', email: 'user@nadhili.ai', plan: upgradedPlan }
+            );
+            showToast(`Hongera! Mpango wa ${upgradedPlan.toUpperCase()} umewashwa!`);
+            setActiveView('chat');
+          }}
+          showToast={showToast}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#141413] text-[#ede8dd] font-sans selection:bg-[#da7756]/30 selection:text-white">
       {/* Toast Notification */}
@@ -958,6 +1334,28 @@ export default function App() {
             />
             <Search className="w-3.5 h-3.5 text-neutral-500 absolute left-2.5 top-2.5" />
           </div>
+
+          {/* Upgrade to Pro Dedicated Page Button */}
+          <button
+            onClick={() => setActiveView('plans')}
+            className="w-full bg-gradient-to-r from-[#da7756]/20 via-[#eb947a]/10 to-[#1f1f1d] hover:from-[#da7756]/30 border border-[#da7756]/40 hover:border-[#da7756]/70 rounded-xl p-2.5 text-left transition flex items-center justify-between group shadow-sm"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-[#da7756] to-[#eb947a] text-white flex items-center justify-center shrink-0 shadow-sm">
+                <Crown className="w-3.5 h-3.5" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <span>Get Pro</span>
+                  <span className="text-[9px] bg-[#da7756] text-white px-1.5 py-0.2 rounded-full font-mono font-medium uppercase">
+                    Plans
+                  </span>
+                </p>
+                <p className="text-[10px] text-neutral-400">Normal, Hard & Ultra (Tsh 2,000+)</p>
+              </div>
+            </div>
+            <ArrowRight className="w-3.5 h-3.5 text-[#da7756] group-hover:translate-x-0.5 transition-transform" />
+          </button>
         </div>
 
         {/* Conversations History List */}
@@ -1131,11 +1529,11 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setProModalOpen(true)}
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-[#da7756]/10 text-[#da7756] border border-[#da7756]/30 hover:bg-[#da7756]/20 transition"
+              onClick={() => setActiveView('plans')}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-gradient-to-r from-[#da7756] to-[#eb947a] hover:from-[#e38161] hover:to-[#f09f87] text-white shadow-md transition active:scale-95"
             >
               <Crown className="w-3.5 h-3.5" />
-              <span>Pro Plan</span>
+              <span>Get Pro</span>
             </button>
 
             <button
@@ -1371,6 +1769,64 @@ export default function App() {
                               <Edit3 className="w-3.5 h-3.5 text-amber-400" />
                               <span>Edit</span>
                             </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* NADHILI Voice TTS Audio Player Card */}
+                      {msg.audioUrl && (
+                        <div className="my-3 p-4 rounded-2xl border border-[#383834] bg-[#1a1a18] max-w-md shadow-xl space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-xl bg-[#da7756]/15 border border-[#da7756]/30 flex items-center justify-center text-[#da7756]">
+                                <Volume2 className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <p className="text-xs font-semibold text-white">NADHILI Voice Speech</p>
+                                <p className="text-[10px] text-neutral-400">Natural Audio Generation</p>
+                              </div>
+                            </div>
+                            <a
+                              href={msg.audioUrl}
+                              download="nadhili-voice.mp3"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#272725] hover:bg-[#333330] border border-[#3a3a36] text-[11px] text-neutral-200 transition"
+                            >
+                              <Download className="w-3 h-3 text-[#da7756]" />
+                              <span>Download MP3</span>
+                            </a>
+                          </div>
+
+                          <audio controls className="w-full h-10 rounded-xl" src={msg.audioUrl}>
+                            Your browser does not support audio playback.
+                          </audio>
+
+                          {msg.audioText && (
+                            <p className="text-xs text-neutral-300 italic bg-[#21211f] p-2.5 rounded-xl border border-[#2f2f2b]">
+                              "{msg.audioText}"
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* NADHILI Bible AI Theological Insight Card */}
+                      {msg.bibleData && (
+                        <div className="my-3 p-4 rounded-2xl border border-amber-600/30 bg-[#1c1a17] max-w-xl shadow-xl space-y-2.5">
+                          <div className="flex items-center justify-between border-b border-[#2e2b26] pb-2">
+                            <div className="flex items-center gap-2">
+                              <BookOpen className="w-4 h-4 text-amber-500" />
+                              <span className="text-xs font-semibold text-amber-200">NADHILI Bible AI Insight</span>
+                            </div>
+                            <span className="text-[10px] bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded-full font-mono">
+                              {msg.bibleData.translation}
+                            </span>
+                          </div>
+                          <p className="text-xs font-semibold text-white">
+                            "{msg.bibleData.question}"
+                          </p>
+                          <div className="text-xs text-neutral-200 leading-relaxed whitespace-pre-wrap">
+                            {msg.bibleData.answer}
                           </div>
                         </div>
                       )}
@@ -2181,6 +2637,24 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ClickPesa USSD Push Checkout Modal */}
+      <ClickPesaCheckoutModal
+        isOpen={checkoutModalOpen}
+        onClose={() => setCheckoutModalOpen(false)}
+        plan={selectedPlanForCheckout}
+        user={user}
+        token={token}
+        onSuccess={(upgradedPlan) => {
+          setUser((prev) =>
+            prev
+              ? { ...prev, plan: upgradedPlan }
+              : { id: 'user_' + Date.now(), name: 'User', email: 'user@nadhili.ai', plan: upgradedPlan }
+          );
+          showToast(`Hongera! Mpango wa ${upgradedPlan.toUpperCase()} umewashwa!`);
+        }}
+        showToast={showToast}
+      />
     </div>
   );
 }

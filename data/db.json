@@ -26,5 +26,67 @@
       "content": "What is Cloudflare Workers in 10 words?",
       "created_at": 1790880789
     }
+  ],
+  "payments": [
+    {
+      "id": "pay_5620eb44-e8a2-42b6-89ea-2cf44c745a06",
+      "orderReference": "NPMUR43JN2C4WP",
+      "plan": "hard",
+      "amount": 25000,
+      "currency": "TZS",
+      "phoneNumber": "255712345678",
+      "network": "mpesa",
+      "status": "PENDING",
+      "createdAt": 1790954550830,
+      "updatedAt": 1790954550830
+    },
+    {
+      "id": "pay_05f49cce-ea20-4508-a778-761adcffaab4",
+      "orderReference": "NPMUR48BBDZNFG",
+      "plan": "normal",
+      "amount": 10000,
+      "currency": "TZS",
+      "phoneNumber": "255693469723",
+      "network": "mpesa",
+      "status": "PENDING",
+      "createdAt": 1790954773322,
+      "updatedAt": 1790954773322
+    },
+    {
+      "id": "pay_dfe354ab-5b9d-405d-9c44-f58223d480a7",
+      "orderReference": "NPMUR49BPXMNNS",
+      "plan": "normal",
+      "amount": 10000,
+      "currency": "TZS",
+      "phoneNumber": "255693469723",
+      "network": "airtel",
+      "status": "PENDING",
+      "createdAt": 1790954820501,
+      "updatedAt": 1790954820501
+    },
+    {
+      "id": "pay_19728fce-5f43-4a98-97b6-9413d8f08a41",
+      "orderReference": "NPMUR4CTWX17V4",
+      "plan": "normal",
+      "amount": 10000,
+      "currency": "TZS",
+      "phoneNumber": "255712345678",
+      "network": "mpesa",
+      "status": "PENDING",
+      "createdAt": 1790954984049,
+      "updatedAt": 1790954984049
+    },
+    {
+      "id": "pay_03395dff-42ff-4f10-96e1-95fd63ac7828",
+      "orderReference": "NPMUR4HWAEPOS0",
+      "plan": "normal",
+      "amount": 2000,
+      "currency": "TZS",
+      "phoneNumber": "255712345678",
+      "network": "mpesa",
+      "status": "PENDING",
+      "createdAt": 1790955220407,
+      "updatedAt": 1790955220407
+    }
   ]
 }

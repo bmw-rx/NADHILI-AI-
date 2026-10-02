@@ -31,10 +31,35 @@ export interface Message {
   created_at: number;
 }
 
+export interface PaymentRecord {
+  id: string;
+  orderReference: string;
+  userId?: string;
+  plan: 'normal' | 'hard' | 'ultra' | string;
+  amount: number;
+  currency: string;
+  phoneNumber: string;
+  network?: string;
+  status: 'PENDING' | 'SUCCESS' | 'FAILED';
+  rawResponse?: any;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface NotificationRecord {
+  id: string;
+  title: string;
+  message: string;
+  targetPlan?: string;
+  createdAt: number;
+}
+
 interface LocalSchema {
   users: User[];
   conversations: Conversation[];
   messages: Message[];
+  payments: PaymentRecord[];
+  notifications: NotificationRecord[];
 }
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -45,6 +70,8 @@ class DatabaseManager {
     users: [],
     conversations: [],
     messages: [],
+    payments: [],
+    notifications: [],
   };
 
   private databaseUrl: string = process.env.DATABASE_URL || '';
@@ -337,6 +364,10 @@ class DatabaseManager {
     return this.localData.users.find((u) => u.id === id);
   }
 
+  async getUserById(id: string): Promise<User | undefined> {
+    return this.findUserById(id);
+  }
+
   async createUser(name: string, email: string, passwordHash: string): Promise<User> {
     const cleanEmail = email.toLowerCase().trim();
     const cleanName = name.trim();
@@ -382,6 +413,148 @@ class DatabaseManager {
     this.localData.users.push(user);
     this.saveLocal();
     return user;
+  }
+
+  async updateUserPlan(userId: string, plan: string): Promise<boolean> {
+    if (this.dbConnected) {
+      try {
+        await this.executeQuery(
+          `UPDATE users SET plan = $1 WHERE id = $2;`,
+          [plan, userId]
+        );
+      } catch (err) {
+        console.error('Database updateUserPlan error:', err);
+      }
+    }
+    const u = this.localData.users.find((user) => user.id === userId);
+    if (u) {
+      u.plan = plan;
+      this.saveLocal();
+    }
+    return true;
+  }
+
+  // --- ADMIN PANEL METHODS ---
+  async getAllUsers(): Promise<Omit<User, 'password_hash'>[]> {
+    if (this.dbConnected) {
+      try {
+        const rows = await this.executeQuery(
+          `SELECT id, email, COALESCE(name, 'User') as name, COALESCE(plan, 'free') as plan, created_at
+           FROM users
+           ORDER BY created_at DESC;`
+        );
+        return rows.map((r: any) => ({
+          id: String(r.id),
+          email: String(r.email),
+          name: String(r.name),
+          plan: String(r.plan || 'free'),
+          created_at: Number(r.created_at) || Math.floor(Date.now() / 1000),
+        }));
+      } catch (err) {
+        console.error('Database getAllUsers error, falling back:', err);
+      }
+    }
+    return this.localData.users.map(({ password_hash, ...u }) => u);
+  }
+
+  async createNotification(title: string, message: string, targetPlan?: string): Promise<NotificationRecord> {
+    const notif: NotificationRecord = {
+      id: 'notif_' + crypto.randomUUID(),
+      title,
+      message,
+      targetPlan: targetPlan || 'all',
+      createdAt: Date.now(),
+    };
+    if (!this.localData.notifications) {
+      this.localData.notifications = [];
+    }
+    this.localData.notifications.unshift(notif);
+    this.saveLocal();
+    return notif;
+  }
+
+  async getNotifications(limit: number = 20): Promise<NotificationRecord[]> {
+    if (!this.localData.notifications) {
+      this.localData.notifications = [];
+    }
+    return this.localData.notifications.slice(0, limit);
+  }
+
+  async getAdminStats() {
+    const users = await this.getAllUsers();
+    const payments = this.localData.payments || [];
+    const conversations = this.localData.conversations || [];
+    const messages = this.localData.messages || [];
+
+    const planCounts: Record<string, number> = {
+      free: 0,
+      normal: 0,
+      hard: 0,
+      ultra: 0,
+    };
+    users.forEach((u) => {
+      const p = (u.plan || 'free').toLowerCase();
+      planCounts[p] = (planCounts[p] || 0) + 1;
+    });
+
+    const totalRevenue = payments
+      .filter((p) => p.status === 'SUCCESS')
+      .reduce((sum, p) => sum + (p.amount || 0), 0);
+
+    return {
+      totalUsers: users.length,
+      planCounts,
+      totalRevenue,
+      totalPayments: payments.length,
+      successfulPayments: payments.filter((p) => p.status === 'SUCCESS').length,
+      totalConversations: conversations.length,
+      totalMessages: messages.length,
+      recentPayments: payments.slice(-10).reverse(),
+      notificationsCount: (this.localData.notifications || []).length,
+    };
+  }
+
+  // --- PAYMENTS & USSD TRANSACTIONS ---
+  async savePayment(payment: PaymentRecord): Promise<PaymentRecord> {
+    if (!this.localData.payments) {
+      this.localData.payments = [];
+    }
+    const existingIndex = this.localData.payments.findIndex(
+      (p) => p.orderReference === payment.orderReference
+    );
+    if (existingIndex !== -1) {
+      this.localData.payments[existingIndex] = payment;
+    } else {
+      this.localData.payments.push(payment);
+    }
+    this.saveLocal();
+    return payment;
+  }
+
+  async getPaymentByOrderRef(orderRef: string): Promise<PaymentRecord | undefined> {
+    if (!this.localData.payments) {
+      this.localData.payments = [];
+    }
+    return this.localData.payments.find((p) => p.orderReference === orderRef);
+  }
+
+  async updatePaymentStatus(
+    orderRef: string,
+    status: 'PENDING' | 'SUCCESS' | 'FAILED',
+    rawResponse?: any
+  ): Promise<PaymentRecord | undefined> {
+    const payment = await this.getPaymentByOrderRef(orderRef);
+    if (payment) {
+      payment.status = status;
+      payment.updatedAt = Date.now();
+      if (rawResponse) payment.rawResponse = rawResponse;
+      if (status === 'SUCCESS' && payment.userId) {
+        await this.updateUserPlan(payment.userId, payment.plan);
+      }
+      this.saveLocal();
+      return payment;
+    }
+    return undefined;
   }
 
   // --- CONVERSATIONS ---
