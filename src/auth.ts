@@ -20,7 +20,15 @@ export function comparePassword(password: string, hash: string): boolean {
   return sha === hash;
 }
 
-export function signToken(payload: { userId: string; email: string; name: string }): string {
+export interface TokenPayload {
+  userId: string;
+  email: string;
+  name: string;
+  role?: string;
+  plan?: string;
+}
+
+export function signToken(payload: TokenPayload): string {
   const header = { alg: 'HS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
   const fullPayload = {
@@ -41,7 +49,7 @@ export function signToken(payload: { userId: string; email: string; name: string
   return `${signatureInput}.${signature}`;
 }
 
-export function verifyToken(token: string): { userId: string; email: string; name: string } | null {
+export function verifyToken(token: string): TokenPayload | null {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return null;

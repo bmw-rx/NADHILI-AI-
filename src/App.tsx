@@ -49,6 +49,7 @@ import {
   Film,
   Bell,
   History,
+  MessageSquare,
 } from 'lucide-react';
 import { MarkdownRenderer } from './components/MarkdownRenderer';
 import { PlansPage } from './components/PlansPage';
@@ -317,11 +318,61 @@ export default function App() {
   // --- INITIAL LOAD & AUTH ---
   useEffect(() => {
     fetchSystemStatus();
+    fetchConversations();
+    fetchNotifications();
+
     if (token) {
       fetchUser();
-      fetchConversations();
     }
+
+    const checkAdminPath = () => {
+      if (typeof window !== 'undefined') {
+        if (window.location.pathname === '/nadhiliai' || window.location.hash === '#/nadhiliai') {
+          setActiveView('admin');
+        }
+      }
+    };
+    checkAdminPath();
+    window.addEventListener('popstate', checkAdminPath);
+    window.addEventListener('hashchange', checkAdminPath);
+
+    return () => {
+      window.removeEventListener('popstate', checkAdminPath);
+      window.removeEventListener('hashchange', checkAdminPath);
+    };
   }, [token]);
+
+  const fetchNotifications = async () => {
+    try {
+      const res = await fetch('/api/notifications');
+      if (res.ok) {
+        const data = await res.json();
+        const notifs = data.notifications || [];
+        setAppNotifications(notifs);
+        const lastSeen = Number(localStorage.getItem('nadhili_last_seen_notif') || '0');
+        const unread = notifs.filter((n: any) => n.createdAt > lastSeen).length;
+        setUnreadNotifsCount(unread);
+      }
+    } catch {}
+  };
+
+  const markNotificationsAsRead = () => {
+    localStorage.setItem('nadhili_last_seen_notif', String(Date.now()));
+    setUnreadNotifsCount(0);
+  };
+
+  const requestNotificationPermission = async () => {
+    if ('Notification' in window) {
+      const perm = await Notification.requestPermission();
+      if (perm === 'granted') {
+        showToast('Arifa za app zimewashwa!');
+      } else {
+        showToast('Ruhusa ya arifa haikutolewa.');
+      }
+    } else {
+      showToast('Kivinjari hiki hakiruhusu arifa za mfumo.');
+    }
+  };
 
   const fetchSystemStatus = async () => {
     try {
@@ -757,8 +808,30 @@ export default function App() {
       created_at: Math.floor(Date.now() / 1000),
     };
 
+    let activeConvId = currentConversationId;
+    if (!activeConvId) {
+      activeConvId = 'conv_' + Date.now();
+      setCurrentConversationId(activeConvId);
+      const title = promptToSend.slice(0, 32) || 'Mazungumzo Mapya';
+      const newConv: Conversation = {
+        id: activeConvId,
+        user_id: user?.id || 'guest',
+        title,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000),
+      };
+      setConversations((prev) => {
+        const updated = [newConv, ...prev.filter((c) => c.id !== activeConvId)];
+        saveGuestConversations(updated);
+        return updated;
+      });
+    }
+
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
+    if (activeConvId) {
+      localStorage.setItem(`nadhili_guest_msgs_${activeConvId}`, JSON.stringify(newMessages));
+    }
     setInputPrompt('');
     setAttachedFiles([]);
     setIsGenerating(true);
@@ -771,6 +844,97 @@ export default function App() {
     setTimeout(() => {
       chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: 'smooth' });
     }, 50);
+
+    // If NADHILI Video AI model is chosen (Pro Model)
+    if (selectedModel === 'nadhili-video-ai') {
+      const isProUser = user && (user.plan === 'hard' || user.plan === 'ultra' || user.plan === 'admin');
+      if (!isProUser) {
+        const proNotice: ChatMessage = {
+          role: 'assistant',
+          content: `🎥 **NADHILI Video AI ni mfumo wa Pro.**\n\nInatengeneza video za HD za kiwango cha sinema kulingana na maelezo yako.\n\n👉 **Tafadhali fungua ukurasa wa [Mipango ya Pro (Get Pro)] au boresha mpango wako kuwa Plan ya Hard (TZS 5,000) au Ultra (TZS 10,000) ili kutumia Video AI.**`,
+          created_at: Math.floor(Date.now() / 1000),
+        };
+        const updatedMsgs = [...newMessages, proNotice];
+        setMessages(updatedMsgs);
+        if (activeConvId) {
+          localStorage.setItem(`nadhili_guest_msgs_${activeConvId}`, JSON.stringify(updatedMsgs));
+        }
+        setIsGenerating(false);
+        return;
+      }
+
+      const assistantPlaceholder: ChatMessage = {
+        role: 'assistant',
+        content: `🎥 NADHILI Video AI inatengeneza video kwa ajili ya: "${promptToSend}"...`,
+        videoPrompt: promptToSend,
+        isVideoLoading: true,
+        created_at: Math.floor(Date.now() / 1000),
+      };
+      setMessages([...newMessages, assistantPlaceholder]);
+      abortControllerRef.current = new AbortController();
+
+      try {
+        const res = await fetch('/api/generate-video', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            prompt: promptToSend,
+            conversationId: activeConvId,
+          }),
+          signal: abortControllerRef.current.signal,
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'Haikuweza kutengeneza video');
+        }
+
+        if (data.conversationId && activeConvId !== data.conversationId) {
+          activeConvId = data.conversationId;
+          setCurrentConversationId(data.conversationId);
+          fetchConversations();
+        }
+
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastIdx = updated.length - 1;
+          updated[lastIdx] = {
+            id: data.assistantMessageId,
+            role: 'assistant',
+            content: `🎥 **NADHILI Video AI Imekamilika!**\n\n> "${data.prompt}"`,
+            videoUrl: data.videoUrl,
+            videoPrompt: data.prompt,
+            isVideoLoading: false,
+            created_at: Math.floor(Date.now() / 1000),
+          };
+          if (activeConvId) {
+            localStorage.setItem(`nadhili_guest_msgs_${activeConvId}`, JSON.stringify(updated));
+          }
+          return updated;
+        });
+        showToast('Video imetengenezwa kikamilifu!');
+      } catch (err: any) {
+        if (err.name === 'AbortError') return;
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastIdx = updated.length - 1;
+          updated[lastIdx] = {
+            role: 'assistant',
+            content: `⚠️ Hitilafu ya kutengeneza video: ${err.message || 'Tafadhali jaribu tena.'}`,
+            isVideoLoading: false,
+            created_at: Math.floor(Date.now() / 1000),
+          };
+          return updated;
+        });
+        showToast(err.message || 'Video generation failed');
+      } finally {
+        setIsGenerating(false);
+      }
+      return;
+    }
 
     // If NADHILI IGLAM model is chosen, generate image via secure server endpoint
     if (selectedModel === 'nadhili-iglam') {
@@ -935,8 +1099,8 @@ export default function App() {
           },
           body: JSON.stringify({
             text: promptToSend,
-            to: 'en',
-            conversationId: currentConversationId,
+            to: ttsVoice || 'sw',
+            conversationId: activeConvId,
           }),
           signal: abortControllerRef.current.signal,
         });
@@ -962,6 +1126,9 @@ export default function App() {
             audioText: data.text,
             created_at: Math.floor(Date.now() / 1000),
           };
+          if (activeConvId) {
+            localStorage.setItem(`nadhili_guest_msgs_${activeConvId}`, JSON.stringify(updated));
+          }
           return updated;
         });
         showToast('Voice audio generated!');
@@ -1059,9 +1226,15 @@ export default function App() {
         }
       }
 
-      if (token) {
-        fetchConversations();
+      if (activeConvId) {
+        const finalMsgs = [
+          ...newMessages,
+          { role: 'assistant' as const, content: streamedResponse, created_at: Math.floor(Date.now() / 1000) },
+        ];
+        localStorage.setItem(`nadhili_guest_msgs_${activeConvId}`, JSON.stringify(finalMsgs));
       }
+
+      fetchConversations();
     } catch (err: any) {
       if (err.name === 'AbortError') {
         showToast('Generation stopped');
@@ -1204,6 +1377,20 @@ export default function App() {
   const filteredConversations = conversations.filter((c) =>
     c.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  if (activeView === 'admin') {
+    return (
+      <AdminPanel
+        onBackToChat={() => {
+          if (typeof window !== 'undefined' && window.location.pathname === '/nadhiliai') {
+            window.history.pushState({}, '', '/');
+          }
+          setActiveView('chat');
+        }}
+        showToast={showToast}
+      />
+    );
+  }
 
   if (activeView === 'plans') {
     return (
@@ -1358,30 +1545,22 @@ export default function App() {
           </button>
         </div>
 
+        {/* Conversations History List Header */}
+        <div className="px-3 pt-2 pb-1 flex items-center justify-between text-[11px] font-semibold text-neutral-400">
+          <span className="flex items-center gap-1.5 uppercase tracking-wider text-[10px] text-neutral-400 font-bold">
+            <MessageSquare className="w-3.5 h-3.5 text-[#da7756]" />
+            Historia ya Gumzo
+          </span>
+          <span className="text-[10px] font-mono bg-[#1c1c1a] border border-[#2d2d2a] px-1.5 py-0.2 rounded text-neutral-400">
+            {filteredConversations.length}
+          </span>
+        </div>
+
         {/* Conversations History List */}
         <div className="flex-1 overflow-y-auto px-2 space-y-1">
-          {!token ? (
-            <div className="p-4 text-center">
-              <div className="w-9 h-9 rounded-full bg-[#1b1b19] border border-[#2a2a27] text-neutral-400 mx-auto mb-2 flex items-center justify-center">
-                <Database className="w-4 h-4 text-[#da7756]" />
-              </div>
-              <p className="text-xs text-neutral-300 font-medium">Cloud Storage Memory</p>
-              <p className="text-[11px] text-neutral-500 mt-1 mb-3">
-                Sign in to save and sync full conversations across your devices.
-              </p>
-              <button
-                onClick={() => {
-                  setAuthTab('signin');
-                  setAuthModalOpen(true);
-                }}
-                className="w-full bg-[#1f1f1d] hover:bg-[#2a2a27] border border-[#333330] text-white py-2 rounded-xl text-xs font-medium transition"
-              >
-                Sign In
-              </button>
-            </div>
-          ) : filteredConversations.length === 0 ? (
+          {filteredConversations.length === 0 ? (
             <div className="p-6 text-center text-xs text-neutral-500">
-              {searchQuery ? 'No matching conversations' : 'No past conversations found'}
+              {searchQuery ? 'Hakuna mazungumzo yanayofanana' : 'Bado hauna historia ya gumzo. Anzisha mazungumzo mapya!'}
             </div>
           ) : (
             filteredConversations.map((conv) => {
@@ -1402,7 +1581,7 @@ export default function App() {
                   </div>
                   <button
                     onClick={(e) => deleteConversation(e, conv.id)}
-                    title="Delete conversation"
+                    title="Futa mazungumzo"
                     className="opacity-0 group-hover:opacity-100 hover:text-red-400 p-1 transition absolute right-2"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -1410,6 +1589,23 @@ export default function App() {
                 </div>
               );
             })
+          )}
+
+          {!token && (
+            <div className="mt-4 p-3 rounded-xl bg-[#181816] border border-[#2a2a27] text-center">
+              <p className="text-[11px] text-neutral-400 mb-2">
+                Ingia (Sign in) ili kusawazisha na kuhifadhi gumzo zako kwenye vifaa vyako vyote.
+              </p>
+              <button
+                onClick={() => {
+                  setAuthTab('signin');
+                  setAuthModalOpen(true);
+                }}
+                className="w-full bg-[#20201d] hover:bg-[#2b2b28] border border-[#363632] text-white py-1.5 rounded-lg text-xs font-medium transition"
+              >
+                Ingia Akaunti
+              </button>
+            </div>
           )}
         </div>
 
@@ -1496,13 +1692,39 @@ export default function App() {
             >
               <Menu className="w-5 h-5 text-neutral-300" />
             </button>
-            <span className="text-xs text-neutral-400 hidden sm:inline-block">
-              {currentConversationId ? 'Current Chat' : 'New Session'}
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[#1c1c1a] border border-[#2c2c28] hover:border-[#da7756]/50 text-neutral-300 hover:text-white text-xs transition"
+              title="Tazama Historia ya Gumzo"
+            >
+              <History className="w-3.5 h-3.5 text-[#da7756]" />
+              <span className="font-medium">Historia ({conversations.length})</span>
+            </button>
+            <span className="text-xs text-neutral-500 hidden md:inline-block font-mono">
+              {currentConversationId ? 'Gumzo Linaloendelea' : 'Kipindi Kipya'}
             </span>
           </div>
 
           {/* Account / User Avatar / Database & Settings */}
           <div className="flex items-center gap-2">
+            {/* Notification Bell */}
+            <button
+              onClick={() => {
+                setNotificationsModalOpen(true);
+                markNotificationsAsRead();
+                requestNotificationPermission();
+              }}
+              title="Arifa na Matangazo ya App"
+              className="relative w-8 h-8 rounded-full bg-[#20201e] hover:bg-[#2c2c29] border border-[#333330] flex items-center justify-center text-neutral-300 hover:text-white transition shadow-sm"
+            >
+              <Bell className="w-4 h-4 text-neutral-300" />
+              {unreadNotifsCount > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#da7756] text-white text-[9px] font-bold flex items-center justify-center animate-pulse">
+                  {unreadNotifsCount}
+                </span>
+              )}
+            </button>
+
             <button
               onClick={() => {
                 setSettingsTab('database');
@@ -1773,6 +1995,68 @@ export default function App() {
                         </div>
                       )}
 
+                      {/* NADHILI Video AI Loading Card */}
+                      {msg.isVideoLoading && (
+                        <div className="my-3 p-5 rounded-2xl border border-[#383834] bg-[#1a1a18] max-w-md flex flex-col items-center text-center space-y-3 shadow-lg">
+                          <div className="w-12 h-12 rounded-2xl bg-[#da7756]/15 border border-[#da7756]/30 flex items-center justify-center text-[#da7756]">
+                            <Film className="w-6 h-6 animate-pulse" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-semibold text-white">NADHILI Video AI inatengeneza video yako...</p>
+                            <p className="text-[11px] text-neutral-400 mt-1 max-w-xs truncate">
+                              "{msg.videoPrompt}"
+                            </p>
+                          </div>
+                          <div className="w-full bg-[#272724] rounded-full h-1.5 overflow-hidden">
+                            <div className="bg-gradient-to-r from-[#da7756] to-[#eb947a] h-full w-2/3 animate-pulse" />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* NADHILI Video AI Player Card */}
+                      {msg.videoUrl && (
+                        <div className="my-3 rounded-2xl border border-[#383834] bg-[#1a1a18] max-w-lg shadow-xl overflow-hidden space-y-2.5 p-3">
+                          <div className="relative rounded-xl overflow-hidden bg-black aspect-video flex items-center justify-center">
+                            <video
+                              controls
+                              playsInline
+                              src={msg.videoUrl}
+                              className="w-full h-full object-cover rounded-xl"
+                            >
+                              Kivinjari chako hakiruhusu video hii.
+                            </video>
+                          </div>
+                          <div className="flex items-center justify-between pt-1">
+                            <div className="flex items-center gap-2">
+                              <Film className="w-4 h-4 text-[#da7756]" />
+                              <span className="text-xs font-semibold text-white">NADHILI Video AI</span>
+                              <span className="text-[9px] bg-purple-500/20 text-purple-300 px-1.5 py-0.2 rounded-full font-mono uppercase font-bold">
+                                Pro 1080p
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <a
+                                href={msg.videoUrl}
+                                download="nadhili-video.mp4"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#272725] hover:bg-[#333330] border border-[#3a3a36] text-[11px] text-neutral-200 transition"
+                              >
+                                <Download className="w-3 h-3 text-[#da7756]" />
+                                <span>Pakua (MP4)</span>
+                              </a>
+                              <button
+                                onClick={() => handleEditPrompt(msg.videoPrompt || msg.content)}
+                                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#272725] hover:bg-[#333330] border border-[#3a3a36] text-[11px] text-amber-300 transition"
+                              >
+                                <Edit3 className="w-3 h-3" />
+                                <span>Badili</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       {/* NADHILI Voice TTS Audio Player Card */}
                       {msg.audioUrl && (
                         <div className="my-3 p-4 rounded-2xl border border-[#383834] bg-[#1a1a18] max-w-md shadow-xl space-y-3">
@@ -1916,6 +2200,47 @@ export default function App() {
                       </button>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* TTS Voice Selector Bar ("ai ya tts weka tts zake") */}
+              {selectedModel === 'nadhili-tts' && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 mb-2 bg-[#1c1c1a] border border-[#2e2e2a] rounded-xl text-xs overflow-x-auto">
+                  <span className="text-[11px] text-neutral-400 font-semibold shrink-0 flex items-center gap-1">
+                    <Volume2 className="w-3.5 h-3.5 text-[#da7756]" /> Chagua Sauti (Voice):
+                  </span>
+                  {[
+                    { id: 'sw', label: '🇹🇿 Kiswahili' },
+                    { id: 'en', label: '🇺🇸 English' },
+                    { id: 'fr', label: '🇫🇷 Français' },
+                    { id: 'ar', label: '🇸🇦 العربية' },
+                  ].map((v) => (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => setTtsVoice(v.id as any)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition shrink-0 ${
+                        ttsVoice === v.id
+                          ? 'bg-[#da7756] text-white shadow-sm'
+                          : 'bg-[#252522] text-neutral-300 hover:text-white'
+                      }`}
+                    >
+                      {v.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Video AI Mode Indicator */}
+              {selectedModel === 'nadhili-video-ai' && (
+                <div className="flex items-center justify-between px-3 py-1.5 mb-2 bg-[#1c1c1a] border border-purple-500/30 rounded-xl text-xs">
+                  <span className="text-[11px] text-purple-300 font-bold flex items-center gap-1.5">
+                    <Film className="w-3.5 h-3.5 text-[#da7756]" />
+                    NADHILI Video AI (Pro Mode)
+                  </span>
+                  <span className="text-[10px] text-neutral-400 font-mono">
+                    1080p Cinematic • MP4
+                  </span>
                 </div>
               )}
 
@@ -2357,6 +2682,73 @@ export default function App() {
               className="mt-6 w-full bg-[#272724] hover:bg-[#333330] text-neutral-200 border border-[#383834] font-medium py-2 rounded-xl text-xs transition"
             >
               Done
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* --- NOTIFICATIONS MODAL / DRAWER --- */}
+      {notificationsModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-[#1b1b19] border border-[#2e2e2a] rounded-3xl max-w-md w-full p-6 text-neutral-200 relative shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#2b2b27]">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-[#da7756]/15 border border-[#da7756]/30 text-[#da7756] flex items-center justify-center">
+                  <Bell className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Arifa na Matangazo (Notifications)</h3>
+                  <p className="text-[10px] text-neutral-400">Taarifa rasmi za NADHILI AI</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setNotificationsModalOpen(false)}
+                className="text-neutral-400 hover:text-white p-1 rounded-full hover:bg-[#282824]"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Notification Permission Banner */}
+            <div className="p-3 rounded-2xl bg-[#22221f] border border-[#30302c] flex items-center justify-between gap-3">
+              <div className="text-xs text-neutral-300">
+                <p className="font-semibold text-white">Ruhusu Arifa (Push Notifications)</p>
+                <p className="text-[10px] text-neutral-400">Pata taarifa za masasisho mapya na ofa papo hapo.</p>
+              </div>
+              <button
+                onClick={requestNotificationPermission}
+                className="px-3 py-1.5 rounded-xl bg-[#da7756] hover:bg-[#eb947a] text-white text-xs font-semibold shrink-0 transition"
+              >
+                Ruhusu
+              </button>
+            </div>
+
+            {/* List of Notifications */}
+            <div className="space-y-2.5 max-h-[350px] overflow-y-auto pr-1">
+              {appNotifications.length === 0 ? (
+                <div className="text-center py-10 text-xs text-neutral-500">
+                  Hakuna arifa mpya kwa sasa.
+                </div>
+              ) : (
+                appNotifications.map((n) => (
+                  <div key={n.id} className="p-3.5 rounded-2xl bg-[#22221f] border border-[#30302c] space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-white">{n.title}</span>
+                      <span className="text-[10px] text-neutral-500 font-mono">
+                        {new Date(n.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <p className="text-xs text-neutral-300 leading-relaxed">{n.message}</p>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <button
+              onClick={() => setNotificationsModalOpen(false)}
+              className="w-full py-2 bg-[#252522] hover:bg-[#30302c] text-neutral-300 hover:text-white text-xs font-medium rounded-xl transition"
+            >
+              Funga (Close)
             </button>
           </div>
         </div>

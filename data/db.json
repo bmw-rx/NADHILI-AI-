@@ -5,7 +5,7 @@
       "name": "Nadhili Dev",
       "email": "test@nadhili.ai",
       "password_hash": "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f",
-      "plan": "free",
+      "plan": "ultra",
       "created_at": 1790880771
     }
   ],
@@ -87,6 +87,15 @@
       "status": "PENDING",
       "createdAt": 1790955220407,
       "updatedAt": 1790955220407
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notif_344edf46-7f9b-4986-99a3-07429ce35c02",
+      "title": "Karibu NADHILI Video AI!",
+      "message": "Sasa unaweza kutengeneza video za HD za AI kwenye mpango wa Pro.",
+      "targetPlan": "all",
+      "createdAt": 1791038689430
     }
   ]
 }
