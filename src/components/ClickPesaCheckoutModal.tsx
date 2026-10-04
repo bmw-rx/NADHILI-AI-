@@ -37,12 +37,14 @@ export const ClickPesaCheckoutModal: React.FC<ClickPesaCheckoutModalProps> = ({
   const [orderRef, setOrderRef] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'push_sent' | 'success' | 'failed'>('idle');
   const [statusMessage, setStatusMessage] = useState('');
+  const [diagnosticMessage, setDiagnosticMessage] = useState('');
   const [countdown, setCountdown] = useState(60);
 
   useEffect(() => {
     if (!isOpen) {
       setStatus('idle');
       setStatusMessage('');
+      setDiagnosticMessage('');
       setOrderRef(null);
       setLoading(false);
       setCountdown(60);
@@ -116,8 +118,10 @@ export const ClickPesaCheckoutModal: React.FC<ClickPesaCheckoutModalProps> = ({
         data = { error: 'Hitilafu ya mtandao wa malipo. Tafadhali jaribu tena.' };
       }
 
-      if (!res.ok) {
-        throw new Error(data.error || 'Haikuweza kuanzisha malipo ya USSD Push');
+      if (!res.ok || data.success === false) {
+        setDiagnosticMessage(data.diagnostic || '');
+        if (data.orderReference) setOrderRef(data.orderReference);
+        throw new Error(data.error || 'Haikuweza kuanzisha malipo ya USSD Push kwenye simu.');
       }
 
       setOrderRef(data.orderReference);
@@ -304,17 +308,55 @@ export const ClickPesaCheckoutModal: React.FC<ClickPesaCheckoutModalProps> = ({
 
         {/* Status: Failed */}
         {status === 'failed' && (
-          <div className="bg-red-950/30 border border-red-500/30 rounded-2xl p-4 mb-4 text-center space-y-2 animate-in fade-in">
-            <div className="w-10 h-10 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center mx-auto text-red-400">
-              <AlertCircle className="w-5 h-5" />
+          <div className="bg-red-950/40 border border-red-500/40 rounded-2xl p-4 mb-5 text-left space-y-3 animate-in fade-in">
+            <div className="flex items-center gap-2.5 text-red-400">
+              <div className="w-8 h-8 rounded-xl bg-red-500/20 border border-red-500/30 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5 text-red-400" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-white">Kwanini Malipo Hayajaja Kwenye Simu?</h4>
+                <p className="text-[10px] text-red-300 font-mono">Hitilafu ya USSD Push</p>
+              </div>
             </div>
-            <p className="text-xs text-red-300">{statusMessage || 'Malipo hayakukamilika.'}</p>
-            <button
-              onClick={() => setStatus('idle')}
-              className="text-xs text-neutral-300 underline hover:text-white"
-            >
-              Jaribu tena
-            </button>
+
+            <div className="bg-black/40 border border-red-900/50 rounded-xl p-3 text-xs text-red-200 leading-relaxed space-y-1.5">
+              <p className="font-semibold text-white">Sababu:</p>
+              <p className="text-red-300">{statusMessage || 'Hitilafu ya kuwasiliana na mfumo wa malipo.'}</p>
+              {diagnosticMessage && (
+                <div className="pt-2 border-t border-red-900/40 text-[11px] text-neutral-300">
+                  <span className="font-semibold text-amber-400">Ufafanuzi: </span>
+                  {diagnosticMessage}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-[#1e1e1a] border border-[#33332e] rounded-xl p-2.5 text-[11px] text-neutral-300 space-y-1">
+              <p className="font-semibold text-neutral-200">Kagua mambo yafuatayo:</p>
+              <ul className="list-disc list-inside space-y-0.5 text-neutral-400 text-[10px]">
+                <li>Hakikisha nambari ya simu ({phoneNumber || '07XXXXXXXX'}) ipo hewani.</li>
+                <li>Ikiwa funguo za ClickPesa hazijawekwa, admin anapaswa kuziweka kwenye Admin Panel.</li>
+                <li>Unaweza pia kutumia uthibitisho wa moja kwa moja hapa chini:</li>
+              </ul>
+            </div>
+
+            <div className="pt-1 flex flex-col sm:flex-row gap-2">
+              <button
+                type="button"
+                onClick={handleInstantActivate}
+                disabled={loading}
+                className="flex-1 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5 shadow"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Washa Mpango Mara Moja (Jaribio)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setStatus('idle')}
+                className="py-2 px-3 bg-[#262623] hover:bg-[#30302b] text-neutral-300 text-xs font-medium rounded-xl transition"
+              >
+                Badili Namba / Jaribu Tena
+              </button>
+            </div>
           </div>
         )}
 

@@ -7,6 +7,24 @@
       "password_hash": "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f",
       "plan": "ultra",
       "created_at": 1790880771
+    },
+    {
+      "id": "usr_3b75b638-4a54-41e8-8e14-ae4b9803a439",
+      "name": "Amina Juma",
+      "email": "amina@example.com",
+      "password_hash": "$2b$10$SFTYnmL3T23rG4m6ViEfk.GgPx2KmuqWzbtVEfeangmjgcC5VfHIu",
+      "plan": "free",
+      "avatar": "https://api.dicebear.com/9.x/avataaars/svg?seed=Amina",
+      "created_at": 1791099765
+    },
+    {
+      "id": "usr_23dee0e9-fa7f-46a9-9ac7-e12bbb91115c",
+      "name": "Bmw",
+      "email": "nadhilisanga0@gmail.com",
+      "password_hash": "$2b$10$aGE9iaUtoAwjk7LEyoKl8uv2xYu0.7a0dqVPEyvtRuSgrsRpim3IO",
+      "plan": "normal",
+      "avatar": "https://api.dicebear.com/9.x/avataaars/svg?seed=avatar_uq2olqb",
+      "created_at": 1791100004
     }
   ],
   "conversations": [
@@ -16,6 +34,13 @@
       "title": "What is Cloudflare Workers in 10 words?",
       "created_at": 1790880789,
       "updated_at": 1790880789
+    },
+    {
+      "id": "conv_63eac488-67db-4963-9521-c35652ce3b27",
+      "user_id": "usr_058094d8-3f02-4800-a075-f7d0e1c5bd7b",
+      "title": "Idada vue io",
+      "created_at": 1791099105,
+      "updated_at": 1791099119
     }
   ],
   "messages": [
@@ -25,6 +50,20 @@
       "role": "user",
       "content": "What is Cloudflare Workers in 10 words?",
       "created_at": 1790880789
+    },
+    {
+      "id": "msg_f005564e-bd58-4c67-9453-155b216f6b35",
+      "conversation_id": "conv_63eac488-67db-4963-9521-c35652ce3b27",
+      "role": "user",
+      "content": "Idada vue io",
+      "created_at": 1791099105
+    },
+    {
+      "id": "msg_d4ff28d3-0b99-4184-a904-5f03af0cc7f9",
+      "conversation_id": "conv_63eac488-67db-4963-9521-c35652ce3b27",
+      "role": "assistant",
+      "content": "This QR code is an **eSIM activation code** (format: `LPA:1$...`). \n\nIf you are trying to install this eSIM on the same phone where this screenshot is saved, you don't need another device to scan it. Follow these steps depending on your device:\n\n---\n\n### Method 1: On iPhone (iOS 17+)\n1. Save this screenshot to your **Photos** app.\n2. Open the image in **Photos**.\n3. **Press and hold directly on the QR code**.\n4. A popup menu will appear — tap **Add eSIM** (or **Set up Cellular**).\n5. Follow the on-screen prompts to complete activation.\n\n---\n\n### Method 2: On Samsung / Android\n1. Go to **Settings** > **Connections** > **SIM manager**.\n2. Tap **Add eSIM** > **Scan QR code**.\n3. On the camera scanning screen, tap the **Gallery/Photo icon** (usually in the bottom corner).\n4. Select this screenshot from your gallery to scan it directly.\n\n---\n\n### Method 3: Extract the Manual Code via Google Lens\nIf your phone requires manual entry (SM-DP+ Address & Activation Code):\n1. Open this image in **Google Photos** or **Google Lens**.\n2. Tap the QR code to read the text.\n3. It will display a string starting with:\n   ```text\n   LPA:1$[SM-DP+ Address]$[Activation Code]\n   ```\n4. Copy the:\n   - **SM-DP+ Address** (the server address between the first and second `$`)\n   - **Activation Code** (the code between the second and third `$`)\n5. Enter them manually in your phone's eSIM settings under **\"Enter details manually\"**.",
+      "created_at": 1791099119
     }
   ],
   "payments": [
@@ -87,6 +126,129 @@
       "status": "PENDING",
       "createdAt": 1790955220407,
       "updatedAt": 1790955220407
+    },
+    {
+      "id": "pay_9a586a98-edef-4d36-bb33-f19d93dee5f0",
+      "orderReference": "APPMUTH6X15X8YJ",
+      "plan": "app_app_nadhili_pro_apk",
+      "amount": 3000,
+      "currency": "TZS",
+      "phoneNumber": "255712345678",
+      "network": "mpesa",
+      "status": "SUCCESS",
+      "createdAt": 1791097475513,
+      "updatedAt": 1791097483164,
+      "rawResponse": {
+        "approvedByAdmin": true,
+        "at": 1791097483164
+      }
+    },
+    {
+      "id": "pay_f643c7b7-348d-4189-8c15-7c59eba90ae2",
+      "orderReference": "NPMUTHLVM9FRRH",
+      "userId": "usr_058094d8-3f02-4800-a075-f7d0e1c5bd7b",
+      "plan": "normal",
+      "amount": 2000,
+      "currency": "TZS",
+      "phoneNumber": "255693469723",
+      "network": "airtel",
+      "status": "PENDING",
+      "createdAt": 1791098173521,
+      "updatedAt": 1791098173521
+    },
+    {
+      "id": "pay_2be240b3-f2fc-4c4d-b39b-a83ed05801a2",
+      "orderReference": "NPMUTIJFZX6C34",
+      "plan": "normal",
+      "amount": 2000,
+      "currency": "TZS",
+      "phoneNumber": "255712345678",
+      "network": "MNO",
+      "status": "PENDING",
+      "createdAt": 1791099739581,
+      "updatedAt": 1791099739581
+    },
+    {
+      "id": "pay_8c5cfe38-149a-4e85-a3ec-72ccc611e6d5",
+      "orderReference": "NPMUTIJQ260J1J",
+      "plan": "normal",
+      "amount": 2000,
+      "currency": "TZS",
+      "phoneNumber": "255712345678",
+      "network": "MNO",
+      "status": "PENDING",
+      "createdAt": 1791099752622,
+      "updatedAt": 1791099752622
+    },
+    {
+      "id": "pay_75fb9a4c-43bc-402b-a063-5f2aa7758687",
+      "orderReference": "NPMUTIQFZT32ZE",
+      "userId": "usr_23dee0e9-fa7f-46a9-9ac7-e12bbb91115c",
+      "plan": "normal",
+      "amount": 2000,
+      "currency": "TZS",
+      "phoneNumber": "255693469723",
+      "network": "mpesa",
+      "status": "PENDING",
+      "createdAt": 1791100066169,
+      "updatedAt": 1791100066169
+    },
+    {
+      "id": "pay_f203b27a-e145-4898-9cdb-90904b90f95d",
+      "orderReference": "NPMUTIS989E1PD",
+      "userId": "usr_23dee0e9-fa7f-46a9-9ac7-e12bbb91115c",
+      "plan": "normal",
+      "amount": 2000,
+      "currency": "TZS",
+      "phoneNumber": "255693469723",
+      "network": "mpesa",
+      "status": "SUCCESS",
+      "createdAt": 1791100150713,
+      "updatedAt": 1791100171415
+    },
+    {
+      "id": "pay_85173b62-89f6-4b12-a7e9-68dff108e287",
+      "orderReference": "NPMUTITBZO6MUK",
+      "plan": "normal",
+      "amount": 2000,
+      "currency": "TZS",
+      "phoneNumber": "255712345678",
+      "network": "MNO",
+      "status": "PENDING",
+      "createdAt": 1791100200949,
+      "updatedAt": 1791100205003,
+      "rawResponse": {
+        "id": "CLPLCPCAW7BX8MFPG",
+        "status": "PROCESSING",
+        "channel": "TIGO-PESA",
+        "orderReference": "NPMUTITBZO6MUK",
+        "collectedAmount": "2000.00",
+        "collectedCurrency": "TZS",
+        "createdAt": "2026-10-04T07:50:04.483Z",
+        "clientId": "IDTPCwHGiAd5TD9lXEciigA5DwMEiIp3"
+      }
+    },
+    {
+      "id": "pay_08593548-81cd-4a7a-a6c3-38dd502ce15e",
+      "orderReference": "APPMUTITKYYSZ5B",
+      "plan": "app_app_nadhili_pro_apk",
+      "amount": 3000,
+      "currency": "TZS",
+      "phoneNumber": "255712345678",
+      "network": "MNO",
+      "status": "PENDING",
+      "createdAt": 1791100212586,
+      "updatedAt": 1791100215486,
+      "rawResponse": {
+        "id": "CLPLCPCAQRMNT48XG",
+        "status": "FAILED",
+        "channel": "TIGO-PESA",
+        "orderReference": "APPMUTITKYYSZ5B",
+        "collectedAmount": "3000.00",
+        "collectedCurrency": "TZS",
+        "createdAt": "2026-10-04T07:50:14.932Z",
+        "clientId": "IDTPCwHGiAd5TD9lXEciigA5DwMEiIp3"
+      }
     }
   ],
   "notifications": [
@@ -96,6 +258,65 @@
       "message": "Sasa unaweza kutengeneza video za HD za AI kwenye mpango wa Pro.",
       "targetPlan": "all",
       "createdAt": 1791038689430
+    }
+  ],
+  "premiumApps": [
+    {
+      "id": "app_nadhili_pro_apk",
+      "name": "NADHILI AI Pro Mobile APK",
+      "imageUrl": "https://files.catbox.moe/jfvyv5.png",
+      "description": "Toleo rasmi la Android lenye AI ya Picha, Video na Sauti bila kikomo kwa simu yako.",
+      "priceTZS": 3000,
+      "downloadUrl": "https://files.catbox.moe/jfvyv5.png",
+      "version": "v2.4.0",
+      "size": "42 MB",
+      "category": "AI Tools & Mobile",
+      "createdAt": 1790924669918
+    },
+    {
+      "id": "app_whatsapp_ultra",
+      "name": "WhatsApp Mod Ultra AI Edition",
+      "imageUrl": "https://files.catbox.moe/jfvyv5.png",
+      "description": "WhatsApp yenye uwezo wa Akili Bandia, anti-delete messages, status downloader na auto-reply bot.",
+      "priceTZS": 2500,
+      "downloadUrl": "https://files.catbox.moe/jfvyv5.png",
+      "version": "v18.20",
+      "size": "68 MB",
+      "category": "Android APK",
+      "createdAt": 1791011069918
+    },
+    {
+      "id": "app_video_editor_vip",
+      "name": "CapCut & Premiere Pro Mobile VIP",
+      "imageUrl": "https://files.catbox.moe/jfvyv5.png",
+      "description": "Programu ya kutengeneza na kuedit video za 4K bila watermark, yenye templates zote za VIP.",
+      "priceTZS": 5000,
+      "downloadUrl": "https://files.catbox.moe/jfvyv5.png",
+      "version": "v12.0.1",
+      "size": "95 MB",
+      "category": "Media & Video Editing",
+      "createdAt": 1791097469918
+    }
+  ],
+  "appPurchases": [
+    {
+      "id": "pur_3791ad75-7f37-480b-ac85-5f5c2c02f77b",
+      "appId": "app_nadhili_pro_apk",
+      "phoneNumber": "255712345678",
+      "orderReference": "APPMUTH6X15X8YJ",
+      "amount": 3000,
+      "status": "SUCCESS",
+      "createdAt": 1791097475513,
+      "unlockedAt": 1791097483164
+    },
+    {
+      "id": "pur_1d76a622-3958-42d6-b510-4776092f533d",
+      "appId": "app_nadhili_pro_apk",
+      "phoneNumber": "255712345678",
+      "orderReference": "APPMUTITKYYSZ5B",
+      "amount": 3000,
+      "status": "PENDING",
+      "createdAt": 1791100212586
     }
   ]
 }

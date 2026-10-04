@@ -50,11 +50,15 @@ import {
   Bell,
   History,
   MessageSquare,
+  Camera,
 } from 'lucide-react';
 import { MarkdownRenderer } from './components/MarkdownRenderer';
 import { PlansPage } from './components/PlansPage';
 import { ClickPesaCheckoutModal } from './components/ClickPesaCheckoutModal';
 import { AdminPanel } from './components/AdminPanel';
+import { PremiumAppsPage } from './components/PremiumAppsPage';
+import { NadhiliLogo } from './components/NadhiliLogo';
+import { AvatarPicker, getDicebearUrl } from './components/AvatarPicker';
 
 interface AttachedFile {
   id: string;
@@ -100,6 +104,7 @@ interface AuthUser {
   name: string;
   email: string;
   plan: string;
+  avatar?: string;
   created_at?: number;
 }
 
@@ -196,14 +201,72 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
 
   // UI state
-  const [activeView, setActiveView] = useState<'chat' | 'plans' | 'admin'>(() => {
+  const [activeView, setActiveView] = useState<'chat' | 'plans' | 'admin' | 'premium-apps'>(() => {
     if (typeof window !== 'undefined') {
       if (window.location.pathname === '/nadhiliai' || window.location.hash === '#/nadhiliai') {
         return 'admin';
       }
+      if (
+        window.location.pathname === '/premium-apps' ||
+        window.location.pathname === '/apps' ||
+        window.location.hash === '#/premium-apps' ||
+        window.location.hash === '#/apps'
+      ) {
+        return 'premium-apps';
+      }
+      if (window.location.pathname === '/plans' || window.location.hash === '#/plans') {
+        return 'plans';
+      }
     }
     return 'chat';
   });
+
+  // Independent URL popstate handler (back/forward button support)
+  useEffect(() => {
+    const handlePopState = () => {
+      const path = window.location.pathname;
+      const hash = window.location.hash;
+      if (path === '/nadhiliai' || hash === '#/nadhiliai') {
+        setActiveView('admin');
+      } else if (
+        path === '/premium-apps' ||
+        path === '/apps' ||
+        hash === '#/premium-apps' ||
+        hash === '#/apps'
+      ) {
+        setActiveView('premium-apps');
+      } else if (path === '/plans' || hash === '#/plans') {
+        setActiveView('plans');
+      } else {
+        setActiveView('chat');
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigateToChat = () => {
+    if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+      window.history.pushState({}, '', '/');
+    }
+    setActiveView('chat');
+  };
+
+  const navigateToApps = () => {
+    if (typeof window !== 'undefined' && window.location.pathname !== '/premium-apps') {
+      window.history.pushState({}, '', '/premium-apps');
+    }
+    setActiveView('premium-apps');
+    setSidebarOpen(false);
+  };
+
+  const navigateToPlans = () => {
+    if (typeof window !== 'undefined' && window.location.pathname !== '/plans') {
+      window.history.pushState({}, '', '/plans');
+    }
+    setActiveView('plans');
+    setSidebarOpen(false);
+  };
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
@@ -222,6 +285,7 @@ export default function App() {
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authName, setAuthName] = useState('');
+  const [authAvatar, setAuthAvatar] = useState<string>(getDicebearUrl('Nadhili'));
   const [authError, setAuthError] = useState('');
 
   const [proModalOpen, setProModalOpen] = useState(false);
@@ -268,7 +332,7 @@ export default function App() {
   });
 
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'ai' | 'database' | 'clickpesa' | 'persona'>('ai');
+  const [settingsTab, setSettingsTab] = useState<'ai' | 'database' | 'clickpesa' | 'persona' | 'avatar'>('ai');
   const [creativityLevel, setCreativityLevel] = useState<'balanced' | 'creative' | 'precise'>('balanced');
   const [systemPersona, setSystemPersona] = useState<string>('default');
 
@@ -652,7 +716,7 @@ export default function App() {
     const isSignUp = authTab === 'signup';
     const endpoint = isSignUp ? '/api/auth/signup' : '/api/auth/signin';
     const payload = isSignUp
-      ? { name: authName, email: authEmail, password: authPassword }
+      ? { name: authName, email: authEmail, password: authPassword, avatar: authAvatar }
       : { email: authEmail, password: authPassword };
 
     try {
@@ -715,6 +779,39 @@ export default function App() {
     reader.readAsDataURL(file);
     e.target.value = '';
     setAttachMenuOpen(false);
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          if (file.size > 10 * 1024 * 1024) {
+            showToast('Picha ni kubwa mno (kiwango cha juu ni 10MB)');
+            return;
+          }
+          const reader = new FileReader();
+          reader.onload = () => {
+            const base64 = reader.result as string;
+            const newFile: AttachedFile = {
+              id: 'file_' + Math.random().toString(36).slice(2, 9),
+              name: file.name || 'Picha-Iliyobandikwa.png',
+              type: 'image',
+              size: file.size,
+              dataBase64: base64,
+            };
+            setAttachedFiles((prev) => [...prev, newFile]);
+            showToast('Picha imepachikwa! AI iko tayari kuisoma.');
+          };
+          reader.readAsDataURL(file);
+          break;
+        }
+      }
+    }
   };
 
   const handleDocumentFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1381,12 +1478,16 @@ export default function App() {
   if (activeView === 'admin') {
     return (
       <AdminPanel
-        onBackToChat={() => {
-          if (typeof window !== 'undefined' && window.location.pathname === '/nadhiliai') {
-            window.history.pushState({}, '', '/');
-          }
-          setActiveView('chat');
-        }}
+        onBackToChat={navigateToChat}
+        showToast={showToast}
+      />
+    );
+  }
+
+  if (activeView === 'premium-apps') {
+    return (
+      <PremiumAppsPage
+        onBackToChat={navigateToChat}
         showToast={showToast}
       />
     );
@@ -1474,9 +1575,7 @@ export default function App() {
         <div className="p-4 flex items-center justify-between border-b border-[#222220]">
           <div className="flex items-center gap-2.5">
             {/* NADHILI Brand Icon */}
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#da7756] to-[#eb947a] text-white font-serif font-bold text-sm flex items-center justify-center shadow-[0_0_12px_rgba(218,119,86,0.3)]">
-              N
-            </div>
+            <NadhiliLogo size={32} />
             <div>
               <div className="flex items-center gap-1.5">
                 <span className="text-sm font-semibold tracking-wide text-white">NADHILI AI</span>
@@ -1524,7 +1623,7 @@ export default function App() {
 
           {/* Upgrade to Pro Dedicated Page Button */}
           <button
-            onClick={() => setActiveView('plans')}
+            onClick={navigateToPlans}
             className="w-full bg-gradient-to-r from-[#da7756]/20 via-[#eb947a]/10 to-[#1f1f1d] hover:from-[#da7756]/30 border border-[#da7756]/40 hover:border-[#da7756]/70 rounded-xl p-2.5 text-left transition flex items-center justify-between group shadow-sm"
           >
             <div className="flex items-center gap-2.5">
@@ -1542,6 +1641,28 @@ export default function App() {
               </div>
             </div>
             <ArrowRight className="w-3.5 h-3.5 text-[#da7756] group-hover:translate-x-0.5 transition-transform" />
+          </button>
+
+          {/* App Premium Dedicated Page Button */}
+          <button
+            onClick={navigateToApps}
+            className="w-full bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-[#1f1f1d] hover:from-amber-500/25 border border-amber-500/30 hover:border-amber-500/60 rounded-xl p-2.5 text-left transition flex items-center justify-between group shadow-sm"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-amber-500 to-orange-500 text-white flex items-center justify-center shrink-0 shadow-sm">
+                <Smartphone className="w-3.5 h-3.5" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-white flex items-center gap-1.5 group-hover:text-amber-300 transition">
+                  <span>App Premium</span>
+                  <span className="text-[9px] bg-amber-500 text-black font-extrabold px-1.5 py-0.2 rounded-full font-mono uppercase">
+                    Store
+                  </span>
+                </p>
+                <p className="text-[10px] text-neutral-400">Download Apps & VIP APKs</p>
+              </div>
+            </div>
+            <ArrowRight className="w-3.5 h-3.5 text-amber-400 group-hover:translate-x-0.5 transition-transform" />
           </button>
         </div>
 
@@ -1635,9 +1756,24 @@ export default function App() {
           {user ? (
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5 overflow-hidden">
-                <div className="w-8 h-8 rounded-full bg-[#da7756]/20 border border-[#da7756]/40 text-[#da7756] flex items-center justify-center font-bold text-xs shrink-0">
-                  {user.name.charAt(0).toUpperCase()}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSettingsTab('avatar');
+                    setSettingsModalOpen(true);
+                  }}
+                  title="Badilisha Avatar ya Wasifu"
+                  className="relative group w-8 h-8 rounded-full overflow-hidden bg-[#2a2a26] border border-[#da7756]/50 text-[#da7756] flex items-center justify-center font-bold text-xs shrink-0 shadow-sm hover:scale-105 transition"
+                >
+                  {user.avatar ? (
+                    <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
+                  ) : (
+                    user.name.charAt(0).toUpperCase()
+                  )}
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-[8px] text-white font-mono">
+                    ✏️
+                  </div>
+                </button>
                 <div className="truncate">
                   <div className="flex items-center gap-1.5">
                     <span className="text-xs font-semibold text-white truncate">{user.name}</span>
@@ -1751,7 +1887,15 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setActiveView('plans')}
+              onClick={navigateToApps}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-[#20201e] hover:bg-[#2c2c29] border border-amber-500/40 hover:border-amber-400 text-amber-300 shadow-sm transition active:scale-95"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-amber-400" />
+              <span>App Premium</span>
+            </button>
+
+            <button
+              onClick={navigateToPlans}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-gradient-to-r from-[#da7756] to-[#eb947a] hover:from-[#e38161] hover:to-[#f09f87] text-white shadow-md transition active:scale-95"
             >
               <Crown className="w-3.5 h-3.5" />
@@ -1784,9 +1928,7 @@ export default function App() {
           {messages.length === 0 ? (
             <div className="max-w-2xl mx-auto my-auto text-center pt-24 pb-12 flex flex-col items-center justify-center">
               {/* NADHILI Brand Icon */}
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-[#da7756] to-[#eb947a] text-white font-serif font-bold text-2xl flex items-center justify-center mx-auto mb-4 shadow-[0_0_24px_rgba(218,119,86,0.35)] select-none">
-                N
-              </div>
+              <NadhiliLogo size={64} className="mx-auto mb-4" />
 
               {/* NADHILI Welcome */}
               <h2 className="text-3xl sm:text-4xl font-serif text-[#ede8dd] font-normal tracking-tight mb-3">
@@ -1826,34 +1968,61 @@ export default function App() {
 
                 if (isUser) {
                   return (
-                    <div key={index} className="flex justify-end group">
+                    <div key={index} className="flex justify-end gap-2.5 group">
                       <div className="max-w-[85%] bg-[#242422] border border-[#333330] rounded-2xl px-4 py-3 text-sm text-[#ede8dd] shadow-sm">
-                        {/* Render attached files on user message */}
-                        {msg.attachments && msg.attachments.length > 0 && (
-                          <div className="flex flex-wrap gap-2 mb-2.5">
-                            {msg.attachments.map((att) => (
+                        {/* Render attached images with full clear preview */}
+                        {msg.attachments &&
+                          msg.attachments
+                            .filter((att) => att.type === 'image' && att.dataBase64)
+                            .map((att) => (
                               <div
                                 key={att.id}
-                                className="flex items-center gap-2 p-1.5 pr-2.5 bg-[#1a1a18] border border-[#333330] rounded-lg text-xs"
+                                className="mb-3 rounded-xl overflow-hidden border border-[#383834] bg-black/40 max-w-md shadow-md"
                               >
-                                {att.type === 'image' && att.dataBase64 ? (
-                                  <img src={att.dataBase64} alt={att.name} className="w-7 h-7 object-cover rounded" />
-                                ) : (
-                                  <FileText className="w-4 h-4 text-[#da7756]" />
-                                )}
-                                <div className="truncate max-w-[140px]">
-                                  <p className="font-medium text-[11px] text-white truncate">{att.name}</p>
-                                  <p className="text-[9px] text-neutral-400">{formatFileSize(att.size)}</p>
+                                <img
+                                  src={att.dataBase64}
+                                  alt={att.name}
+                                  className="w-full h-auto max-h-80 object-contain rounded-xl"
+                                />
+                                <div className="p-1.5 px-2 bg-[#191917] text-[10px] text-neutral-400 flex items-center justify-between border-t border-[#292926]">
+                                  <span className="truncate">{att.name}</span>
+                                  <span className="text-[#da7756] font-mono font-bold">MULTIMODAL VISION</span>
                                 </div>
                               </div>
                             ))}
-                          </div>
-                        )}
+
+                        {/* Render attached documents */}
+                        {msg.attachments &&
+                          msg.attachments.filter((att) => att.type !== 'image').length > 0 && (
+                            <div className="flex flex-wrap gap-2 mb-2.5">
+                              {msg.attachments
+                                .filter((att) => att.type !== 'image')
+                                .map((att) => (
+                                  <div
+                                    key={att.id}
+                                    className="flex items-center gap-2 p-1.5 pr-2.5 bg-[#1a1a18] border border-[#333330] rounded-lg text-xs"
+                                  >
+                                    <FileText className="w-4 h-4 text-[#da7756]" />
+                                    <div className="truncate max-w-[140px]">
+                                      <p className="font-medium text-[11px] text-white truncate">{att.name}</p>
+                                      <p className="text-[9px] text-neutral-400">{formatFileSize(att.size)}</p>
+                                    </div>
+                                  </div>
+                                ))}
+                            </div>
+                          )}
 
                         {/* Backwards compatibility for single image */}
                         {!msg.attachments && msg.image && (
-                          <div className="mb-2">
-                            <img src={msg.image} alt="User attachment" className="max-h-60 rounded-lg object-contain border border-[#333]" />
+                          <div className="mb-3 rounded-xl overflow-hidden border border-[#383834] bg-black/40 max-w-md shadow-md">
+                            <img
+                              src={msg.image}
+                              alt="User attachment"
+                              className="w-full h-auto max-h-80 object-contain rounded-xl"
+                            />
+                            <div className="p-1.5 px-2 bg-[#191917] text-[10px] text-neutral-400 flex items-center justify-between border-t border-[#292926]">
+                              <span className="text-[#da7756] font-mono font-bold">MULTIMODAL VISION</span>
+                            </div>
                           </div>
                         )}
 
@@ -1890,6 +2059,13 @@ export default function App() {
                           </button>
                         </div>
                       </div>
+                      <div className="w-8 h-8 rounded-full overflow-hidden bg-[#2a2a26] border border-[#da7756]/40 text-[#da7756] flex items-center justify-center font-bold text-xs shrink-0 mt-0.5 shadow-sm">
+                        {user?.avatar ? (
+                          <img src={user.avatar} alt="User" className="w-full h-full object-cover" />
+                        ) : (
+                          <User className="w-4 h-4 text-neutral-400" />
+                        )}
+                      </div>
                     </div>
                   );
                 }
@@ -1901,9 +2077,7 @@ export default function App() {
 
                 return (
                   <div key={index} className="flex gap-3.5 group">
-                    <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#da7756] to-[#eb947a] text-white font-serif font-bold text-xs flex items-center justify-center shrink-0 mt-0.5 shadow-[0_0_10px_rgba(218,119,86,0.25)]">
-                      N
-                    </div>
+                    <NadhiliLogo size={32} className="shrink-0 mt-0.5" />
                     <div className="flex-1 max-w-[90%] min-w-0">
                       <div className="text-xs font-semibold text-neutral-300 mb-1 flex items-center gap-2">
                         <span>NADHILI AI</span>
@@ -2244,11 +2418,12 @@ export default function App() {
                 </div>
               )}
 
-              {/* Textarea */}
+              {/* Textarea with Clipboard Paste Support */}
               <textarea
                 ref={textareaRef}
                 rows={1}
                 value={inputPrompt}
+                onPaste={handlePaste}
                 onChange={(e) => {
                   setInputPrompt(e.target.value);
                   e.target.style.height = 'auto';
@@ -2260,13 +2435,13 @@ export default function App() {
                     handleSendMessage();
                   }
                 }}
-                placeholder="Reply to NADHILI AI or paste code..."
+                placeholder="Reply to NADHILI AI, paste image (Ctrl+V) or code..."
                 className="w-full bg-transparent resize-none focus:outline-none text-[15px] text-[#ede8dd] placeholder-neutral-500 max-h-48 px-2 py-1 leading-relaxed"
               />
 
               {/* Bottom Controls Row: Circled areas in user request */}
               <div className="flex items-center justify-between pt-2 px-1 relative">
-                {/* Left group: [ + ] Upload Button & [ Sonnet 3.5 ] Model Pill */}
+                {/* Left group: [ + ] Upload Button, [ Camera ] Vision Button & Model Pill */}
                 <div className="flex items-center gap-2">
                   {/* The '+' Plus Button ("ako ka jumlisha kakupakulia vitu") */}
                   <div className="relative">
@@ -2314,6 +2489,16 @@ export default function App() {
                       </div>
                     )}
                   </div>
+
+                  {/* Direct Camera / Vision Button ("uwezo wa ai kusoma picha") */}
+                  <button
+                    type="button"
+                    onClick={() => imageInputRef.current?.click()}
+                    title="Weka Picha kwa AI kusoma (Multimodal Vision OCR)"
+                    className="w-9 h-9 rounded-full bg-[#272725] hover:bg-[#333330] text-neutral-300 hover:text-[#da7756] flex items-center justify-center transition border border-[#383835] active:scale-95"
+                  >
+                    <Camera className="w-4 h-4" />
+                  </button>
 
                   {/* Model Selector Pill ("na ivyo vingine vya ku change model") */}
                   <div className="relative">
@@ -2525,6 +2710,15 @@ export default function App() {
               >
                 Preferences
               </button>
+              <button
+                type="button"
+                onClick={() => setSettingsTab('avatar')}
+                className={`flex-1 py-1.5 rounded-lg font-medium transition ${
+                  settingsTab === 'avatar' ? 'bg-[#da7756] text-white shadow-sm' : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                Avatar
+              </button>
             </div>
 
             <div className="space-y-4">
@@ -2672,6 +2866,41 @@ export default function App() {
                   </div>
                 </div>
               )}
+
+              {/* TAB 4: Avatar Profile Selector */}
+              {settingsTab === 'avatar' && (
+                <div className="space-y-4">
+                  <AvatarPicker
+                    selectedAvatar={user?.avatar || authAvatar}
+                    onSelectAvatar={async (newAvatar) => {
+                      setAuthAvatar(newAvatar);
+                      if (user) {
+                        setUser((prev) => (prev ? { ...prev, avatar: newAvatar } : null));
+                        if (token) {
+                          try {
+                            await fetch('/api/user/avatar', {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                                Authorization: `Bearer ${token}`,
+                              },
+                              body: JSON.stringify({ avatar: newAvatar }),
+                            });
+                            showToast('Avatar imesasishwa kikamilifu!');
+                          } catch {
+                            showToast('Avatar imewekwa kwenye kifaa hiki');
+                          }
+                        }
+                      }
+                    }}
+                  />
+                  {user && (
+                    <p className="text-[11px] text-emerald-400/90 text-center font-mono">
+                      ✓ Avatar imehifadhiwa kwa akaunti ya {user.name}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             <button
@@ -2806,17 +3035,25 @@ export default function App() {
 
             <form onSubmit={handleAuthSubmit} className="space-y-3">
               {authTab === 'signup' && (
-                <div>
-                  <label className="block text-xs font-medium text-neutral-300 mb-1">Full Name</label>
-                  <input
-                    type="text"
-                    required
-                    value={authName}
-                    onChange={(e) => setAuthName(e.target.value)}
-                    placeholder="Your Name"
-                    className="w-full bg-[#222220] border border-[#33332f] rounded-xl px-3 py-2 text-xs text-white placeholder-neutral-500 focus:border-[#da7756] focus:outline-none"
+                <>
+                  <div>
+                    <label className="block text-xs font-medium text-neutral-300 mb-1">Full Name</label>
+                    <input
+                      type="text"
+                      required
+                      value={authName}
+                      onChange={(e) => setAuthName(e.target.value)}
+                      placeholder="Your Name"
+                      className="w-full bg-[#222220] border border-[#33332f] rounded-xl px-3 py-2 text-xs text-white placeholder-neutral-500 focus:border-[#da7756] focus:outline-none"
+                    />
+                  </div>
+
+                  {/* Dicebear Avatar Picker as requested by user */}
+                  <AvatarPicker
+                    selectedAvatar={authAvatar}
+                    onSelectAvatar={(url) => setAuthAvatar(url)}
                   />
-                </div>
+                </>
               )}
 
               <div>

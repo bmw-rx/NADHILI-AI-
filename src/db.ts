@@ -12,6 +12,7 @@ export interface User {
   email: string;
   password_hash: string;
   plan: string;
+  avatar?: string;
   created_at: number;
 }
 
@@ -54,12 +55,39 @@ export interface NotificationRecord {
   createdAt: number;
 }
 
+export interface PremiumApp {
+  id: string;
+  name: string;
+  imageUrl: string;
+  description: string;
+  priceTZS: number;
+  downloadUrl: string;
+  version?: string;
+  size?: string;
+  category?: string;
+  createdAt: number;
+}
+
+export interface AppPurchase {
+  id: string;
+  appId: string;
+  userId?: string;
+  phoneNumber: string;
+  orderReference: string;
+  amount: number;
+  status: 'PENDING' | 'SUCCESS' | 'FAILED';
+  createdAt: number;
+  unlockedAt?: number;
+}
+
 interface LocalSchema {
   users: User[];
   conversations: Conversation[];
   messages: Message[];
   payments: PaymentRecord[];
   notifications: NotificationRecord[];
+  premiumApps: PremiumApp[];
+  appPurchases: AppPurchase[];
 }
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -72,6 +100,33 @@ class DatabaseManager {
     messages: [],
     payments: [],
     notifications: [],
+    premiumApps: [
+      {
+        id: 'app_nadhili_pro_apk',
+        name: 'NADHILI AI Pro Mobile APK',
+        imageUrl: '/logo.svg',
+        description: 'Toleo rasmi la Android lenye AI ya Picha, Video na Sauti bila kikomo kwa simu yako.',
+        priceTZS: 3000,
+        downloadUrl: '/logo.svg',
+        version: 'v2.4.0',
+        size: '18.5 MB',
+        category: 'Productivity AI',
+        createdAt: Date.now() - 86400000,
+      },
+      {
+        id: 'app_nadhili_dev_suite',
+        name: 'NADHILI Dev Studio Pro',
+        imageUrl: '/logo.svg',
+        description: 'Programu ya kisasa ya kukuza msimbo (coding), utatuzi wa makosa na roboti za kidijitali.',
+        priceTZS: 5000,
+        downloadUrl: '/logo.svg',
+        version: 'v3.1.0',
+        size: '24.2 MB',
+        category: 'Development',
+        createdAt: Date.now() - 172800000,
+      }
+    ],
+    appPurchases: [],
   };
 
   private databaseUrl: string = process.env.DATABASE_URL || '';
@@ -96,11 +151,23 @@ class DatabaseManager {
     if (fs.existsSync(DB_FILE)) {
       try {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        this.localData = JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        this.localData = {
+          users: parsed.users || [],
+          conversations: parsed.conversations || [],
+          messages: parsed.messages || [],
+          payments: parsed.payments || [],
+          notifications: parsed.notifications || [],
+          premiumApps: parsed.premiumApps || [],
+          appPurchases: parsed.appPurchases || [],
+        };
+        this.ensureDefaultApps();
       } catch {
+        this.ensureDefaultApps();
         this.saveLocal();
       }
     } else {
+      this.ensureDefaultApps();
       this.saveLocal();
     }
   }
@@ -368,11 +435,12 @@ class DatabaseManager {
     return this.findUserById(id);
   }
 
-  async createUser(name: string, email: string, passwordHash: string): Promise<User> {
+  async createUser(name: string, email: string, passwordHash: string, avatar?: string): Promise<User> {
     const cleanEmail = email.toLowerCase().trim();
     const cleanName = name.trim();
     const now = Math.floor(Date.now() / 1000);
     const userId = 'usr_' + crypto.randomUUID();
+    const userAvatar = avatar || `https://api.dicebear.com/9.x/avataaars/svg?seed=${encodeURIComponent(cleanName || 'Nadhili')}`;
 
     if (this.dbConnected) {
       try {
@@ -391,6 +459,7 @@ class DatabaseManager {
             email: r.email,
             password_hash: passwordHash,
             plan: r.plan || 'free',
+            avatar: userAvatar,
             created_at: Number(r.created_at) || now,
           };
           this.localData.users.push(user);
@@ -408,11 +477,22 @@ class DatabaseManager {
       email: cleanEmail,
       password_hash: passwordHash,
       plan: 'free',
+      avatar: userAvatar,
       created_at: now,
     };
     this.localData.users.push(user);
     this.saveLocal();
     return user;
+  }
+
+  async updateUserAvatar(userId: string, avatar: string): Promise<boolean> {
+    const u = this.localData.users.find((user) => user.id === userId);
+    if (u) {
+      u.avatar = avatar;
+      this.saveLocal();
+      return true;
+    }
+    return false;
   }
 
   async updateUserPlan(userId: string, plan: string): Promise<boolean> {
@@ -512,6 +592,171 @@ class DatabaseManager {
       recentPayments: payments.slice(-10).reverse(),
       notificationsCount: (this.localData.notifications || []).length,
     };
+  }
+
+  // --- PREMIUM APPS & UNLOCKS ---
+  private ensureDefaultApps() {
+    if (!this.localData.premiumApps || this.localData.premiumApps.length === 0) {
+      this.localData.premiumApps = [
+        {
+          id: 'app_nadhili_pro_apk',
+          name: 'NADHILI AI Pro Mobile APK',
+          imageUrl: '/logo.svg',
+          description: 'Toleo rasmi la Android lenye AI ya Picha, Video na Sauti bila kikomo kwa simu yako.',
+          priceTZS: 3000,
+          downloadUrl: '/logo.svg',
+          version: 'v2.4.0',
+          size: '42 MB',
+          category: 'AI Tools & Mobile',
+          createdAt: Date.now() - 86400000 * 2,
+        },
+        {
+          id: 'app_whatsapp_ultra',
+          name: 'WhatsApp Mod Ultra AI Edition',
+          imageUrl: '/logo.svg',
+          description: 'WhatsApp yenye uwezo wa Akili Bandia, anti-delete messages, status downloader na auto-reply bot.',
+          priceTZS: 2500,
+          downloadUrl: '/logo.svg',
+          version: 'v18.20',
+          size: '68 MB',
+          category: 'Android APK',
+          createdAt: Date.now() - 86400000,
+        },
+        {
+          id: 'app_video_editor_vip',
+          name: 'CapCut & Premiere Pro Mobile VIP',
+          imageUrl: '/logo.svg',
+          description: 'Programu ya kutengeneza na kuedit video za 4K bila watermark, yenye templates zote za VIP.',
+          priceTZS: 5000,
+          downloadUrl: '/logo.svg',
+          version: 'v12.0.1',
+          size: '95 MB',
+          category: 'Media & Video Editing',
+          createdAt: Date.now(),
+        },
+      ];
+      this.saveLocal();
+    }
+  }
+
+  async getPremiumApps(): Promise<Omit<PremiumApp, 'downloadUrl'>[]> {
+    this.ensureDefaultApps();
+    // Omit downloadUrl for security - public never gets the secret link until payment success!
+    return this.localData.premiumApps.map(({ downloadUrl, ...rest }) => rest);
+  }
+
+  async getAllPremiumAppsAdmin(): Promise<PremiumApp[]> {
+    this.ensureDefaultApps();
+    return this.localData.premiumApps;
+  }
+
+  async getPremiumAppById(id: string): Promise<PremiumApp | undefined> {
+    if (!this.localData.premiumApps) {
+      this.localData.premiumApps = [];
+    }
+    return this.localData.premiumApps.find((a) => a.id === id);
+  }
+
+  async createPremiumApp(data: Omit<PremiumApp, 'id' | 'createdAt'>): Promise<PremiumApp> {
+    if (!this.localData.premiumApps) {
+      this.localData.premiumApps = [];
+    }
+    const newApp: PremiumApp = {
+      ...data,
+      id: 'app_' + crypto.randomUUID(),
+      createdAt: Date.now(),
+    };
+    this.localData.premiumApps.unshift(newApp);
+    this.saveLocal();
+    return newApp;
+  }
+
+  async updatePremiumApp(id: string, data: Partial<PremiumApp>): Promise<PremiumApp | null> {
+    if (!this.localData.premiumApps) return null;
+    const app = this.localData.premiumApps.find((a) => a.id === id);
+    if (!app) return null;
+    Object.assign(app, data);
+    this.saveLocal();
+    return app;
+  }
+
+  async deletePremiumApp(id: string): Promise<boolean> {
+    if (!this.localData.premiumApps) return false;
+    const initialLen = this.localData.premiumApps.length;
+    this.localData.premiumApps = this.localData.premiumApps.filter((a) => a.id !== id);
+    if (this.localData.premiumApps.length !== initialLen) {
+      this.saveLocal();
+      return true;
+    }
+    return false;
+  }
+
+  async recordAppPurchase(purchase: AppPurchase): Promise<AppPurchase> {
+    if (!this.localData.appPurchases) {
+      this.localData.appPurchases = [];
+    }
+    const idx = this.localData.appPurchases.findIndex((p) => p.orderReference === purchase.orderReference);
+    if (idx !== -1) {
+      this.localData.appPurchases[idx] = purchase;
+    } else {
+      this.localData.appPurchases.push(purchase);
+    }
+    this.saveLocal();
+    return purchase;
+  }
+
+  async getAppPurchaseByOrderRef(orderRef: string): Promise<AppPurchase | undefined> {
+    if (!this.localData.appPurchases) return undefined;
+    return this.localData.appPurchases.find((p) => p.orderReference === orderRef);
+  }
+
+  async updateAppPurchaseStatus(
+    orderRef: string,
+    status: 'PENDING' | 'SUCCESS' | 'FAILED'
+  ): Promise<AppPurchase | undefined> {
+    const purchase = await this.getAppPurchaseByOrderRef(orderRef);
+    if (purchase) {
+      purchase.status = status;
+      if (status === 'SUCCESS') {
+        purchase.unlockedAt = Date.now();
+      }
+      this.saveLocal();
+      return purchase;
+    }
+    return undefined;
+  }
+
+  async getUnlockedAppsForUser(userId?: string, phone?: string): Promise<string[]> {
+    if (!this.localData.appPurchases) return [];
+    const successful = this.localData.appPurchases.filter((p) => {
+      if (p.status !== 'SUCCESS') return false;
+      if (userId && p.userId === userId) return true;
+      if (phone && p.phoneNumber === phone) return true;
+      return false;
+    });
+    return Array.from(new Set(successful.map((p) => p.appId)));
+  }
+
+  async getAppDownloadUrl(appId: string, orderRef?: string, userId?: string, phone?: string): Promise<string | null> {
+    const app = await this.getPremiumAppById(appId);
+    if (!app) return null;
+
+    // Check if valid successful purchase exists for this app
+    if (orderRef) {
+      const purchase = await this.getAppPurchaseByOrderRef(orderRef);
+      if (purchase && purchase.appId === appId && purchase.status === 'SUCCESS') {
+        return app.downloadUrl;
+      }
+    }
+
+    if (userId || phone) {
+      const unlocked = await this.getUnlockedAppsForUser(userId, phone);
+      if (unlocked.includes(appId)) {
+        return app.downloadUrl;
+      }
+    }
+
+    return null;
   }
 
   // --- PAYMENTS & USSD TRANSACTIONS ---

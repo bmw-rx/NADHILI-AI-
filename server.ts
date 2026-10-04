@@ -30,12 +30,41 @@ function getAuthUser(req: Request) {
 }
 
 // ClickPesa Payment Gateway Configuration (USSD Push & Collections)
+const CLICKPESA_CONFIG_FILE = path.join(process.cwd(), 'data', 'clickpesa_config.json');
+
 const CLICKPESA_CONFIG = {
   clientId: process.env.CLICKPESA_CLIENT_ID || '',
   apiKey: process.env.CLICKPESA_API_KEY || '',
   checksumKey: process.env.CLICKPESA_CHECKSUM_KEY || '',
   baseUrl: process.env.CLICKPESA_BASE_URL || 'https://api.clickpesa.com',
 };
+
+// Load saved credentials from disk if present
+try {
+  if (fs.existsSync(CLICKPESA_CONFIG_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(CLICKPESA_CONFIG_FILE, 'utf-8'));
+    if (saved.clientId) CLICKPESA_CONFIG.clientId = saved.clientId;
+    if (saved.apiKey) CLICKPESA_CONFIG.apiKey = saved.apiKey;
+    if (saved.checksumKey) CLICKPESA_CONFIG.checksumKey = saved.checksumKey;
+    if (saved.baseUrl) CLICKPESA_CONFIG.baseUrl = saved.baseUrl;
+  }
+} catch (e) {
+  console.warn('Could not read saved clickpesa_config.json:', e);
+}
+
+if (!CLICKPESA_CONFIG.clientId && process.env.CLICKPESA_CLIENT_ID) CLICKPESA_CONFIG.clientId = process.env.CLICKPESA_CLIENT_ID;
+if (!CLICKPESA_CONFIG.apiKey && process.env.CLICKPESA_API_KEY) CLICKPESA_CONFIG.apiKey = process.env.CLICKPESA_API_KEY;
+if (!CLICKPESA_CONFIG.checksumKey && process.env.CLICKPESA_CHECKSUM_KEY) CLICKPESA_CONFIG.checksumKey = process.env.CLICKPESA_CHECKSUM_KEY;
+
+function persistClickPesaConfig() {
+  try {
+    const dir = path.dirname(CLICKPESA_CONFIG_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(CLICKPESA_CONFIG_FILE, JSON.stringify(CLICKPESA_CONFIG, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not save clickpesa_config.json:', e);
+  }
+}
 
 let clickpesaTokenCache: { token: string; expiresAt: number } | null = null;
 
@@ -71,10 +100,13 @@ async function getClickPesaAuthToken(): Promise<string> {
     throw new Error(errMsg);
   }
 
-  const token = tokenData?.token || tokenData?.data?.token || tokenData?.accessToken;
-  if (!token) {
+  const rawToken = tokenData?.token || tokenData?.data?.token || tokenData?.accessToken;
+  if (!rawToken || typeof rawToken !== 'string') {
     throw new Error('Tokeni ya uthibitisho haikupatikana kutoka kituo cha malipo');
   }
+
+  // Strip 'Bearer ' if ClickPesa pre-appended it so duplicate 'Bearer Bearer' is avoided
+  const token = rawToken.replace(/^Bearer\s+/i, '').trim();
 
   clickpesaTokenCache = {
     token,
@@ -123,7 +155,7 @@ app.get('/api/neon/status', (_req: Request, res: Response) => {
 // 1. Auth: Sign up
 app.post('/api/auth/signup', async (req: Request, res: Response) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, avatar } = req.body;
     if (!name || !email || !password || password.length < 6) {
       return res
         .status(400)
@@ -136,7 +168,7 @@ app.post('/api/auth/signup', async (req: Request, res: Response) => {
     }
 
     const passHash = hashPassword(password);
-    const user = await db.createUser(name, email, passHash);
+    const user = await db.createUser(name, email, passHash, avatar);
     const token = signToken({ userId: user.id, email: user.email, name: user.name });
 
     return res.json({
@@ -146,6 +178,7 @@ app.post('/api/auth/signup', async (req: Request, res: Response) => {
         name: user.name,
         email: user.email,
         plan: user.plan,
+        avatar: user.avatar,
         created_at: user.created_at,
       },
     });
@@ -179,6 +212,7 @@ app.post('/api/auth/signin', async (req: Request, res: Response) => {
         name: user.name,
         email: user.email,
         plan: user.plan,
+        avatar: user.avatar || `https://api.dicebear.com/9.x/avataaars/svg?seed=${encodeURIComponent(user.name)}`,
         created_at: user.created_at,
       },
     });
@@ -205,9 +239,30 @@ app.get('/api/auth/me', async (req: Request, res: Response) => {
       name: user.name,
       email: user.email,
       plan: user.plan,
+      avatar: user.avatar || `https://api.dicebear.com/9.x/avataaars/svg?seed=${encodeURIComponent(user.name)}`,
       created_at: user.created_at,
     },
   });
+});
+
+// 3.1 Update User Avatar
+app.post('/api/user/avatar', async (req: Request, res: Response) => {
+  try {
+    const auth = getAuthUser(req);
+    if (!auth) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { avatar } = req.body;
+    if (!avatar || typeof avatar !== 'string') {
+      return res.status(400).json({ error: 'Valid avatar URL is required' });
+    }
+
+    await db.updateUserAvatar(auth.userId, avatar.trim());
+    return res.json({ success: true, avatar: avatar.trim() });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to update avatar' });
+  }
 });
 
 // 4. Conversations: List
@@ -584,96 +639,93 @@ const handleUssdPushPayment = async (req: Request, res: Response) => {
 
     const hasLiveKeys = Boolean(CLICKPESA_CONFIG.clientId && CLICKPESA_CONFIG.apiKey);
 
-    if (hasLiveKeys) {
+    if (!hasLiveKeys) {
+      return res.status(400).json({
+        success: false,
+        error: 'Ombi la malipo halijaweza kutokea kwenye simu yako kwa sababu: Funguo za ClickPesa (Client ID & API Key) hazijawekwa bado kwenye mfumo.',
+        diagnostic: 'Ili kupokea USSD Push halisi kwenye simu, msimamizi lazima aweke Client ID na API Key katika Admin Panel > "Malipo & ClickPesa".',
+        canSimulate: true,
+        orderReference: orderRef,
+      });
+    }
+
+    try {
+      let token = '';
       try {
-        const token = await getClickPesaAuthToken();
-        const requestBody = {
-          amount,
-          currency: 'TZS',
+        token = await getClickPesaAuthToken();
+      } catch (authErr: any) {
+        return res.status(400).json({
+          success: false,
+          error: `Hitilafu ya uthibitisho wa ClickPesa: ${authErr.message || 'Client ID au API Key si sahihi'}.`,
+          diagnostic: 'Kagua Client ID na API Key katika Admin Panel > "Malipo & ClickPesa".',
+          canSimulate: true,
           orderReference: orderRef,
-          phoneNumber: cleanPhone,
-        };
-
-        const headers: Record<string, string> = {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        };
-
-        if (CLICKPESA_CONFIG.checksumKey) {
-          headers['checksum'] = generateClickPesaChecksum(requestBody, CLICKPESA_CONFIG.checksumKey);
-        }
-
-        const pushRes = await fetch(`${CLICKPESA_CONFIG.baseUrl}/third-parties/payments/initiate-ussd-push-request`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(requestBody),
-        });
-
-        const rawPushText = await pushRes.text();
-        let pushData: any = null;
-        try {
-          pushData = JSON.parse(rawPushText);
-        } catch {
-          console.warn('Non-JSON push response from gateway:', rawPushText.slice(0, 150));
-        }
-
-        if (pushRes.ok && pushData) {
-          await db.updatePaymentStatus(orderRef, 'PENDING', pushData);
-
-          return res.json({
-            success: true,
-            mode: 'live',
-            orderReference: orderRef,
-            amount,
-            currency: 'TZS',
-            phoneNumber: cleanPhone,
-            plan,
-            status: 'PENDING',
-            message: 'USSD Push imetumwa kwenye simu yako! Tafadhali ingiza PIN kukamilisha malipo.',
-            data: pushData,
-          });
-        }
-
-        // If gateway returned an error or non-OK response, fall back gracefully to pending order
-        console.warn('Gateway returned non-OK response, proceeding with pending order:', pushRes.status);
-        return res.json({
-          success: true,
-          mode: 'initiated',
-          orderReference: orderRef,
-          amount,
-          currency: 'TZS',
-          phoneNumber: cleanPhone,
-          plan,
-          status: 'PENDING',
-          message: 'Ombi la malipo limeanzishwa! Angalia simu yako au thibitisha hapa chini.',
-        });
-      } catch (err: any) {
-        console.warn('USSD Push network notice:', err.message);
-        // Fall back gracefully so user is never blocked and no internal secret is shown!
-        return res.json({
-          success: true,
-          mode: 'initiated',
-          orderReference: orderRef,
-          amount,
-          currency: 'TZS',
-          phoneNumber: cleanPhone,
-          plan,
-          status: 'PENDING',
-          message: 'Ombi la malipo limeanzishwa! Tafadhali ingiza PIN kwenye simu yako kukamilisha.',
         });
       }
-    } else {
-      // Pending order mode
-      return res.json({
-        success: true,
-        mode: 'initiated',
-        orderReference: orderRef,
+
+      const requestBody = {
         amount,
         currency: 'TZS',
+        orderReference: orderRef,
         phoneNumber: cleanPhone,
-        plan,
-        status: 'PENDING',
-        message: 'Ombi la USSD Push limetumwa kwenye simu yako! Tafadhali weka PIN ya simu.',
+      };
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      };
+
+      if (CLICKPESA_CONFIG.checksumKey) {
+        headers['checksum'] = generateClickPesaChecksum(requestBody, CLICKPESA_CONFIG.checksumKey);
+      }
+
+      const pushRes = await fetch(`${CLICKPESA_CONFIG.baseUrl}/third-parties/payments/initiate-ussd-push-request`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+      });
+
+      const rawPushText = await pushRes.text();
+      let pushData: any = null;
+      try {
+        pushData = JSON.parse(rawPushText);
+      } catch {
+        console.warn('Non-JSON push response from gateway:', rawPushText.slice(0, 150));
+      }
+
+      if (pushRes.ok && pushData) {
+        await db.updatePaymentStatus(orderRef, 'PENDING', pushData);
+
+        return res.json({
+          success: true,
+          mode: 'live',
+          orderReference: orderRef,
+          amount,
+          currency: 'TZS',
+          phoneNumber: cleanPhone,
+          plan,
+          status: 'PENDING',
+          message: 'USSD Push imetumwa moja kwa moja kwenye simu yako! Tafadhali ingiza PIN kwenye simu kukamilisha malipo.',
+          data: pushData,
+        });
+      }
+
+      const errorMsg = pushData?.message || pushData?.error || pushData?.details || rawPushText || `Hitilafu ya kituo cha malipo (${pushRes.status})`;
+      return res.status(400).json({
+        success: false,
+        error: `ClickPesa USSD Push haijafanikiwa: ${errorMsg}`,
+        diagnostic: `Seva ya ClickPesa imekataa ombi (Hadhi: ${pushRes.status}). Hakikisha nambari ya simu ${cleanPhone} ina salio la kutosha au ipo hewani.`,
+        canSimulate: true,
+        orderReference: orderRef,
+      });
+    } catch (err: any) {
+      console.warn('USSD Push network notice:', err.message);
+      return res.status(502).json({
+        success: false,
+        error: `Hitilafu ya mawasiliano na seva ya ClickPesa: ${err.message}`,
+        diagnostic: 'Haikuweza kuunganisha na seva ya ClickPesa. Kagua Base URL na mtandao.',
+        canSimulate: true,
+        orderReference: orderRef,
       });
     }
   } catch (err: any) {
@@ -741,6 +793,39 @@ app.get('/api/payments/clickpesa/status/:orderRef', handlePaymentStatusCheck);
 app.get('/api/payments/status/:orderRef', handlePaymentStatusCheck);
 app.get('/api/payment/status/:orderRef', handlePaymentStatusCheck);
 
+// Test / Instant confirmation for development or simulation
+app.post('/api/payments/test-confirm/:orderRef', async (req: Request, res: Response) => {
+  try {
+    const { orderRef } = req.params;
+    const payment = await db.getPaymentByOrderRef(orderRef);
+    if (!payment) {
+      return res.status(404).json({ error: 'Order reference not found' });
+    }
+
+    await db.updatePaymentStatus(orderRef, 'SUCCESS', { simulated: true, timestamp: Date.now() });
+
+    // If it was a plan upgrade
+    if (payment.userId && payment.plan && !payment.plan.startsWith('app_')) {
+      await db.updateUserPlan(payment.userId, payment.plan);
+    }
+
+    // If it was an app purchase
+    const purchase = await db.getAppPurchaseByOrderRef(orderRef);
+    if (purchase) {
+      await db.updateAppPurchaseStatus(orderRef, 'SUCCESS');
+    }
+
+    return res.json({
+      success: true,
+      status: 'SUCCESS',
+      message: 'Malipo yamethibitishwa kwa mafanikio!',
+      payment,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // 6.7 ClickPesa Webhook
 app.post('/api/payments/clickpesa/webhook', async (req: Request, res: Response) => {
   try {
@@ -787,17 +872,76 @@ app.get('/api/payments/clickpesa/config', (req: Request, res: Response) => {
 
 app.post('/api/payments/clickpesa/config', (req: Request, res: Response) => {
   const { clientId, apiKey, checksumKey, baseUrl } = req.body;
-  if (clientId) CLICKPESA_CONFIG.clientId = clientId.trim();
-  if (apiKey) CLICKPESA_CONFIG.apiKey = apiKey.trim();
-  if (checksumKey) CLICKPESA_CONFIG.checksumKey = checksumKey.trim();
-  if (baseUrl) CLICKPESA_CONFIG.baseUrl = baseUrl.trim();
+  if (clientId !== undefined) CLICKPESA_CONFIG.clientId = clientId.trim();
+  if (apiKey !== undefined) CLICKPESA_CONFIG.apiKey = apiKey.trim();
+  if (checksumKey !== undefined) CLICKPESA_CONFIG.checksumKey = checksumKey.trim();
+  if (baseUrl !== undefined) CLICKPESA_CONFIG.baseUrl = baseUrl.trim();
   clickpesaTokenCache = null;
+  persistClickPesaConfig();
 
   return res.json({
     success: true,
-    message: 'ClickPesa credentials updated successfully!',
+    message: 'ClickPesa credentials zimehifadhiwa kikamilifu!',
     configured: Boolean(CLICKPESA_CONFIG.clientId && CLICKPESA_CONFIG.apiKey),
+    hasClientId: Boolean(CLICKPESA_CONFIG.clientId),
+    hasApiKey: Boolean(CLICKPESA_CONFIG.apiKey),
   });
+});
+
+// Test ClickPesa credentials live with ClickPesa server
+app.post('/api/payments/clickpesa/test', async (req: Request, res: Response) => {
+  try {
+    const { clientId, apiKey, baseUrl } = req.body;
+    const testClientId = (clientId || CLICKPESA_CONFIG.clientId || '').trim();
+    const testApiKey = (apiKey || CLICKPESA_CONFIG.apiKey || '').trim();
+    const testBaseUrl = (baseUrl || CLICKPESA_CONFIG.baseUrl || 'https://api.clickpesa.com').trim();
+
+    if (!testClientId || !testApiKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'Tafadhali weka Client ID na API Key za ClickPesa ili kujaribu muunganisho.',
+      });
+    }
+
+    const testRes = await fetch(`${testBaseUrl}/third-parties/generate-token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'client-id': testClientId,
+        'api-key': testApiKey,
+      },
+    });
+
+    const raw = await testRes.text();
+    let data: any = {};
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = { raw: raw.slice(0, 200) };
+    }
+
+    if (!testRes.ok) {
+      return res.status(400).json({
+        success: false,
+        status: testRes.status,
+        error: data.message || data.error || `ClickPesa API imerudisha hitilafu (${testRes.status})`,
+        data,
+      });
+    }
+
+    const token = data.token || data.data?.token || data.accessToken;
+    return res.json({
+      success: true,
+      status: testRes.status,
+      message: 'Muunganisho wa ClickPesa uko TAYARI na unafanya kazi 100%! Tokeni imezalishwa kikamilifu.',
+      tokenPreview: token ? `${token.slice(0, 10)}...` : 'OK',
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: `Hitilafu ya kuunganisha na ClickPesa: ${err.message}`,
+    });
+  }
 });
 
 // 6.9 Direct Plan Activation (for manual or test verification)
@@ -922,6 +1066,513 @@ app.get('/api/notifications', async (_req: Request, res: Response) => {
   }
 });
 
+// Admin Payments Management & Manual Approval
+app.get('/api/admin/payments', async (req: Request, res: Response) => {
+  if (!checkAdminAuth(req)) {
+    return res.status(403).json({ error: 'Ruhusa imezuiwa.' });
+  }
+  try {
+    const stats = await db.getAdminStats();
+    return res.json({ payments: stats.recentPayments || [] });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/payments/:orderRef/approve', async (req: Request, res: Response) => {
+  if (!checkAdminAuth(req)) {
+    return res.status(403).json({ error: 'Ruhusa imezuiwa.' });
+  }
+  const { orderRef } = req.params;
+  try {
+    const payment = await db.getPaymentByOrderRef(orderRef);
+    if (!payment) {
+      return res.status(404).json({ error: 'Malipo hayajapatikana' });
+    }
+    await db.updatePaymentStatus(orderRef, 'SUCCESS', { approvedByAdmin: true, at: Date.now() });
+
+    // If it's an app purchase
+    const appPurchase = await db.getAppPurchaseByOrderRef(orderRef);
+    if (appPurchase) {
+      await db.updateAppPurchaseStatus(orderRef, 'SUCCESS');
+    }
+
+    // If it's a plan upgrade
+    if (payment.userId && payment.plan && !payment.plan.startsWith('app_')) {
+      await db.updateUserPlan(payment.userId, payment.plan);
+    }
+
+    return res.json({
+      success: true,
+      message: `Malipo ya namba ${orderRef} yameidhinishwa kikamilifu na huduma imefunguliwa!`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// --- APP PREMIUM PUBLIC & USER ENDPOINTS ---
+// 1. Get all public apps (downloadUrl is stripped for security until payment success!)
+const handleGetApps = async (_req: Request, res: Response) => {
+  try {
+    const apps = await db.getPremiumApps();
+    return res.json({ apps });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+app.get('/api/apps', handleGetApps);
+app.get('/api/premium-apps', handleGetApps);
+
+// 2. Get unlocked app IDs for current user / phone
+app.get('/api/apps/unlocked', async (req: Request, res: Response) => {
+  try {
+    const auth = getAuthUser(req);
+    const phone = req.query.phone as string;
+    const unlocked = await db.getUnlockedAppsForUser(auth?.userId, phone);
+    return res.json({ unlockedAppIds: unlocked });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. Initiate USSD Push purchase for a specific app
+app.post('/api/apps/purchase/initiate-push', async (req: Request, res: Response) => {
+  try {
+    const { appId, phoneNumber, network } = req.body;
+    const auth = getAuthUser(req);
+
+    if (!appId || !phoneNumber) {
+      return res.status(400).json({ error: 'App ID na nambari ya simu vinahitajika.' });
+    }
+
+    const appRecord = await db.getPremiumAppById(appId);
+    if (!appRecord) {
+      return res.status(404).json({ error: 'App haikupatikana.' });
+    }
+
+    let cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
+    if (cleanPhone.startsWith('0')) {
+      cleanPhone = '255' + cleanPhone.slice(1);
+    } else if (cleanPhone.startsWith('+255')) {
+      cleanPhone = cleanPhone.slice(1);
+    } else if (!cleanPhone.startsWith('255') && cleanPhone.length === 9) {
+      cleanPhone = '255' + cleanPhone;
+    }
+
+    if (cleanPhone.length !== 12 || !cleanPhone.startsWith('255')) {
+      return res.status(400).json({
+        error: 'Nambari ya simu si sahihi. Tumia mfumo wa Tanzania (mfano: 0712345678)',
+      });
+    }
+
+    const amount = appRecord.priceTZS || 2000;
+    // Order reference: max 20 chars alphanumeric according to ClickPesa docs
+    const orderRef = 'APP' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substring(2, 6).toUpperCase();
+
+    // Record AppPurchase
+    await db.recordAppPurchase({
+      id: 'pur_' + crypto.randomUUID(),
+      appId,
+      userId: auth?.userId,
+      phoneNumber: cleanPhone,
+      orderReference: orderRef,
+      amount,
+      status: 'PENDING',
+      createdAt: Date.now(),
+    });
+
+    // Also record general payment
+    await db.savePayment({
+      id: 'pay_' + crypto.randomUUID(),
+      orderReference: orderRef,
+      userId: auth?.userId,
+      plan: `app_${appId}`,
+      amount,
+      currency: 'TZS',
+      phoneNumber: cleanPhone,
+      network: network || 'MNO',
+      status: 'PENDING',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const hasLiveKeys = Boolean(CLICKPESA_CONFIG.clientId && CLICKPESA_CONFIG.apiKey);
+    if (!hasLiveKeys) {
+      return res.status(400).json({
+        success: false,
+        error: 'Ombi la malipo halijaweza kuitwa kwenye simu yako kwa sababu: Funguo za ClickPesa (Client ID & API Key) hazijawekwa kwenye mfumo.',
+        diagnostic: 'Ili kupokea USSD Push halisi kwenye simu, msimamizi lazima aweke Client ID na API Key katika Admin Panel > "Malipo & ClickPesa".',
+        canSimulate: true,
+        orderReference: orderRef,
+      });
+    }
+
+    try {
+      let token = '';
+      try {
+        token = await getClickPesaAuthToken();
+      } catch (authErr: any) {
+        return res.status(400).json({
+          success: false,
+          error: `Hitilafu ya uthibitisho wa ClickPesa: ${authErr.message || 'Client ID au API Key si sahihi'}.`,
+          diagnostic: 'Kagua Client ID na API Key katika Admin Panel > "Malipo & ClickPesa".',
+          canSimulate: true,
+          orderReference: orderRef,
+        });
+      }
+
+      const requestBody = {
+        amount,
+        currency: 'TZS',
+        orderReference: orderRef,
+        phoneNumber: cleanPhone,
+      };
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      };
+
+      if (CLICKPESA_CONFIG.checksumKey) {
+        headers['checksum'] = generateClickPesaChecksum(requestBody, CLICKPESA_CONFIG.checksumKey);
+      }
+
+      const pushRes = await fetch(`${CLICKPESA_CONFIG.baseUrl}/third-parties/payments/initiate-ussd-push-request`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+      });
+
+      const rawPushText = await pushRes.text();
+      let pushData: any = null;
+      try {
+        pushData = JSON.parse(rawPushText);
+      } catch {
+        console.warn('Non-JSON push response from gateway:', rawPushText.slice(0, 150));
+      }
+
+      if (pushRes.ok && pushData) {
+        await db.updatePaymentStatus(orderRef, 'PENDING', pushData);
+        return res.json({
+          success: true,
+          mode: 'live',
+          orderReference: orderRef,
+          appId,
+          appName: appRecord.name,
+          amount,
+          currency: 'TZS',
+          phoneNumber: cleanPhone,
+          status: 'PENDING',
+          message: `USSD Push ya TZS ${amount.toLocaleString()} imetumwa moja kwa moja kwenye simu yako! Tafadhali ingiza PIN kufungua ${appRecord.name}.`,
+          data: pushData,
+        });
+      }
+
+      const errorMsg = pushData?.message || pushData?.error || pushData?.details || rawPushText || `Hitilafu ya kituo cha malipo (${pushRes.status})`;
+      return res.status(400).json({
+        success: false,
+        error: `ClickPesa USSD Push haijafanikiwa: ${errorMsg}`,
+        diagnostic: `Seva ya ClickPesa imekataa ombi (Hadhi: ${pushRes.status}). Hakikisha nambari ya simu ${cleanPhone} ina salio au ipo hewani.`,
+        canSimulate: true,
+        orderReference: orderRef,
+      });
+    } catch (err: any) {
+      console.warn('ClickPesa USSD Push notice for app:', err.message);
+      return res.status(502).json({
+        success: false,
+        error: `Hitilafu ya mawasiliano na seva ya ClickPesa: ${err.message}`,
+        diagnostic: 'Haikuweza kuunganisha na seva ya ClickPesa. Kagua mtandao au Base URL.',
+        canSimulate: true,
+        orderReference: orderRef,
+      });
+    }
+  } catch (err: any) {
+    console.error('App purchase push error:', err);
+    return res.status(500).json({ error: err.message || 'Hitilafu ya kuanzisha malipo ya App.' });
+  }
+});
+
+// 4. Check App Purchase Status
+const handleCheckAppPurchaseStatus = async (req: Request, res: Response) => {
+  try {
+    const { orderRef } = req.params;
+    const purchase = await db.getAppPurchaseByOrderRef(orderRef);
+    if (!purchase) {
+      return res.status(404).json({ error: 'Order reference haijapatikana.' });
+    }
+
+    const app = await db.getPremiumAppById(purchase.appId);
+    if (!app) {
+      return res.status(404).json({ error: 'App haipo.' });
+    }
+
+    if (purchase.status === 'SUCCESS') {
+      return res.json({
+        status: 'SUCCESS',
+        appId: purchase.appId,
+        orderReference: orderRef,
+        downloadUrl: app.downloadUrl,
+      });
+    }
+
+    // Check with ClickPesa if configured
+    if (CLICKPESA_CONFIG.clientId && CLICKPESA_CONFIG.apiKey) {
+      try {
+        const token = await getClickPesaAuthToken();
+        const statusRes = await fetch(`${CLICKPESA_CONFIG.baseUrl}/third-parties/payments/status/${orderRef}`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (statusRes.ok) {
+          const raw = await statusRes.text();
+          let statusData: any = {};
+          try {
+            statusData = JSON.parse(raw);
+          } catch {}
+
+          const state = (statusData.status || statusData.state || '').toUpperCase();
+          if (state === 'SUCCESS' || state === 'COMPLETED' || state === 'PAID') {
+            await db.updatePaymentStatus(orderRef, 'SUCCESS', statusData);
+            await db.updateAppPurchaseStatus(orderRef, 'SUCCESS');
+            return res.json({
+              status: 'SUCCESS',
+              appId: purchase.appId,
+              orderReference: orderRef,
+              downloadUrl: app.downloadUrl,
+            });
+          } else if (state === 'FAILED' || state === 'CANCELLED') {
+            await db.updatePaymentStatus(orderRef, 'FAILED', statusData);
+            await db.updateAppPurchaseStatus(orderRef, 'FAILED');
+            return res.json({ status: 'FAILED', appId: purchase.appId, orderReference: orderRef });
+          }
+        }
+      } catch (err) {
+        console.warn('ClickPesa app status query error:', err);
+      }
+    }
+
+    return res.json({
+      status: purchase.status,
+      appId: purchase.appId,
+      orderReference: orderRef,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+app.get('/api/apps/purchase/status/:orderRef', handleCheckAppPurchaseStatus);
+
+// 5. Explicit Verify App Purchase
+app.post('/api/apps/purchase/verify/:orderRef', async (req: Request, res: Response) => {
+  try {
+    const { orderRef } = req.params;
+    const purchase = await db.getAppPurchaseByOrderRef(orderRef);
+    if (!purchase) {
+      return res.status(404).json({ error: 'Order reference haijapatikana.' });
+    }
+
+    const app = await db.getPremiumAppById(purchase.appId);
+    if (!app) {
+      return res.status(404).json({ error: 'App haipo.' });
+    }
+
+    if (purchase.status === 'SUCCESS') {
+      return res.json({
+        success: true,
+        status: 'SUCCESS',
+        downloadUrl: app.downloadUrl,
+      });
+    }
+
+    // Check ClickPesa status
+    if (CLICKPESA_CONFIG.clientId && CLICKPESA_CONFIG.apiKey) {
+      try {
+        const token = await getClickPesaAuthToken();
+        const statusRes = await fetch(`${CLICKPESA_CONFIG.baseUrl}/third-parties/payments/status/${orderRef}`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (statusRes.ok) {
+          const statusData = await statusRes.json().catch(() => ({}));
+          const state = (statusData.status || statusData.state || '').toUpperCase();
+          if (state === 'SUCCESS' || state === 'COMPLETED' || state === 'PAID') {
+            await db.updatePaymentStatus(orderRef, 'SUCCESS', statusData);
+            await db.updateAppPurchaseStatus(orderRef, 'SUCCESS');
+            return res.json({
+              success: true,
+              status: 'SUCCESS',
+              downloadUrl: app.downloadUrl,
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('Verify ClickPesa error:', e);
+      }
+    }
+
+    // Check if general payment was marked success
+    const generalPay = await db.getPaymentByOrderRef(orderRef);
+    if (generalPay && generalPay.status === 'SUCCESS') {
+      await db.updateAppPurchaseStatus(orderRef, 'SUCCESS');
+      return res.json({
+        success: true,
+        status: 'SUCCESS',
+        downloadUrl: app.downloadUrl,
+      });
+    }
+
+    return res.json({
+      success: false,
+      status: purchase.status,
+      message: 'Malipo bado yanathibitishwa na mtandao wa simu.',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 6. Secure App Download (Validates unlock before giving the file!)
+app.get('/api/apps/download/:appId', async (req: Request, res: Response) => {
+  try {
+    const { appId } = req.params;
+    const auth = getAuthUser(req);
+    const phone = req.query.phone as string;
+    const orderRef = req.query.orderRef as string;
+
+    const downloadUrl = await db.getAppDownloadUrl(appId, orderRef, auth?.userId, phone);
+    if (!downloadUrl) {
+      return res.status(403).json({
+        error: 'Ruhusa imezuiwa: Hujalipia programu hii bado. Tafadhali kamilisha malipo ili upakue.',
+      });
+    }
+
+    return res.redirect(downloadUrl);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/apps/:appId/download-link', async (req: Request, res: Response) => {
+  try {
+    const { appId } = req.params;
+    const { orderRef } = req.body;
+    const auth = getAuthUser(req);
+    const phone = req.query.phone as string;
+
+    const downloadUrl = await db.getAppDownloadUrl(appId, orderRef, auth?.userId, phone);
+    if (!downloadUrl) {
+      return res.status(403).json({
+        error: 'Ruhusa imezuiwa: Hujalipia programu hii bado. Tafadhali kamilisha malipo ili upakue.',
+      });
+    }
+
+    return res.json({ success: true, downloadUrl });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// --- ADMIN APP MANAGEMENT ENDPOINTS ---
+app.get('/api/admin/apps', async (req: Request, res: Response) => {
+  if (!checkAdminAuth(req)) {
+    return res.status(403).json({ error: 'Ruhusa imezuiwa.' });
+  }
+  try {
+    const apps = await db.getAllPremiumAppsAdmin();
+    return res.json({ apps });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/apps', async (req: Request, res: Response) => {
+  if (!checkAdminAuth(req)) {
+    return res.status(403).json({ error: 'Ruhusa imezuiwa.' });
+  }
+  try {
+    const { name, imageUrl, description, priceTZS, downloadUrl, version, size, category } = req.body;
+    if (!name || !downloadUrl) {
+      return res.status(400).json({ error: 'Jina la App na Download Link vinahitajika.' });
+    }
+
+    const created = await db.createPremiumApp({
+      name: name.trim(),
+      imageUrl: (imageUrl || '').trim() || 'https://files.catbox.moe/jfvyv5.png',
+      description: (description || '').trim(),
+      priceTZS: Number(priceTZS) || 3000,
+      downloadUrl: downloadUrl.trim(),
+      version: version ? version.trim() : 'v1.0.0',
+      size: size ? size.trim() : '50 MB',
+      category: category ? category.trim() : 'AI Tools',
+    });
+
+    return res.json({ success: true, app: created, message: 'App ya Premium imeongezwa kikamilifu!' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/apps/:id', async (req: Request, res: Response) => {
+  if (!checkAdminAuth(req)) {
+    return res.status(403).json({ error: 'Ruhusa imezuiwa.' });
+  }
+  try {
+    const { id } = req.params;
+    const updated = await db.updatePremiumApp(id, req.body);
+    if (!updated) {
+      return res.status(404).json({ error: 'App haikupatikana' });
+    }
+    return res.json({ success: true, app: updated, message: 'App imesasishwa kikamilifu!' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/apps/:id', async (req: Request, res: Response) => {
+  if (!checkAdminAuth(req)) {
+    return res.status(403).json({ error: 'Ruhusa imezuiwa.' });
+  }
+  try {
+    const { id } = req.params;
+    const deleted = await db.deletePremiumApp(id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'App haikupatikana' });
+    }
+    return res.json({ success: true, message: 'App imefutwa kikamilifu!' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/apps/unlock', async (req: Request, res: Response) => {
+  if (!checkAdminAuth(req)) {
+    return res.status(403).json({ error: 'Ruhusa imezuiwa.' });
+  }
+  try {
+    const { appId, userId, phoneNumber } = req.body;
+    if (!appId || (!userId && !phoneNumber)) {
+      return res.status(400).json({ error: 'appId na (userId au phoneNumber) vinahitajika' });
+    }
+    const orderRef = 'ADMIN_UNL_' + Date.now().toString(36).toUpperCase();
+    await db.recordAppPurchase({
+      id: 'pur_' + crypto.randomUUID(),
+      appId,
+      userId,
+      phoneNumber: phoneNumber || '0000000000',
+      orderReference: orderRef,
+      amount: 0,
+      status: 'SUCCESS',
+      createdAt: Date.now(),
+      unlockedAt: Date.now(),
+    });
+    return res.json({ success: true, message: 'App imefunguliwa kwa mtumiaji huyu moja kwa moja!' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // 7. Cloudflare Deployment Bundle
 app.get('/api/cloudflare/files', (_req: Request, res: Response) => {
   try {
@@ -1001,75 +1652,91 @@ app.post('/api/chat', async (req: Request, res: Response) => {
     let fullAssistantText = '';
     let streamedSuccess = false;
 
-    // Determine execution priority based on provider preference and available keys
-    const tryGroqFirst =
-      preferredProvider === 'groq' ||
-      (preferredProvider === 'auto' && Boolean(groqKey));
-
-    const tryOpenRouterFirst =
-      preferredProvider === 'openrouter' ||
-      (preferredProvider === 'auto' && !groqKey && Boolean(openRouterKey));
-
-    // ROUTE 1: Groq API
-    if (tryGroqFirst && groqKey) {
+    // Multimodal Vision Routing:
+    // If an image is attached, route directly to Gemini 3.8 Flash for world-class OCR, image reading, and visual intelligence!
+    if (imageBase64) {
       try {
-        fullAssistantText = await streamWithGroq(
+        fullAssistantText = await streamWithGemini(
+          req,
           res,
           activeConvId,
           conversationHistory,
-          model,
-          imageBase64,
-          groqKey
+          imageBase64
         );
         streamedSuccess = true;
-      } catch (groqErr: any) {
-        console.warn('Groq streaming attempt failed:', groqErr.message);
+      } catch (geminiVisionErr: any) {
+        console.error('Gemini vision streaming error:', geminiVisionErr);
       }
-    }
+    } else {
+      // Standard text streaming: Groq -> OpenRouter -> Gemini
+      const tryGroqFirst =
+        preferredProvider === 'groq' ||
+        (preferredProvider === 'auto' && Boolean(groqKey));
 
-    // ROUTE 2: OpenRouter API (if Route 1 failed or if OpenRouter chosen)
-    if (!streamedSuccess && openRouterKey) {
-      try {
-        fullAssistantText = await streamWithOpenRouter(
+      const tryOpenRouterFirst =
+        preferredProvider === 'openrouter' ||
+        (preferredProvider === 'auto' && !groqKey && Boolean(openRouterKey));
+
+      // ROUTE 1: Groq API
+      if (tryGroqFirst && groqKey) {
+        try {
+          fullAssistantText = await streamWithGroq(
+            res,
+            activeConvId,
+            conversationHistory,
+            model,
+            undefined,
+            groqKey
+          );
+          streamedSuccess = true;
+        } catch (groqErr: any) {
+          console.warn('Groq streaming attempt failed:', groqErr.message);
+        }
+      }
+
+      // ROUTE 2: OpenRouter API
+      if (!streamedSuccess && openRouterKey) {
+        try {
+          fullAssistantText = await streamWithOpenRouter(
+            res,
+            activeConvId,
+            conversationHistory,
+            model,
+            undefined,
+            openRouterKey
+          );
+          streamedSuccess = true;
+        } catch (openRouterErr: any) {
+          console.warn('OpenRouter streaming attempt failed:', openRouterErr.message);
+        }
+      }
+
+      // ROUTE 3: If Groq was not tried yet and key is present
+      if (!streamedSuccess && groqKey && !tryGroqFirst) {
+        try {
+          fullAssistantText = await streamWithGroq(
+            res,
+            activeConvId,
+            conversationHistory,
+            model,
+            undefined,
+            groqKey
+          );
+          streamedSuccess = true;
+        } catch (groqErr: any) {
+          console.warn('Groq secondary stream failed:', groqErr.message);
+        }
+      }
+
+      // ROUTE 4: Gemini fallback
+      if (!streamedSuccess) {
+        fullAssistantText = await streamWithGemini(
+          req,
           res,
           activeConvId,
-          conversationHistory,
-          model,
-          imageBase64,
-          openRouterKey
+          conversationHistory
         );
-        streamedSuccess = true;
-      } catch (openRouterErr: any) {
-        console.warn('OpenRouter streaming attempt failed:', openRouterErr.message);
       }
-    }
-
-    // ROUTE 3: If Groq was not tried yet and key is present, try now
-    if (!streamedSuccess && groqKey && !tryGroqFirst) {
-      try {
-        fullAssistantText = await streamWithGroq(
-          res,
-          activeConvId,
-          conversationHistory,
-          model,
-          imageBase64,
-          groqKey
-        );
-        streamedSuccess = true;
-      } catch (groqErr: any) {
-        console.warn('Groq secondary stream failed:', groqErr.message);
-      }
-    }
-
-    // ROUTE 4: Gemini fallback (if neither Groq nor OpenRouter succeeded)
-    if (!streamedSuccess) {
-      fullAssistantText = await streamWithGemini(
-        req,
-        res,
-        activeConvId,
-        conversationHistory,
-        imageBase64
-      );
     }
 
     // Persist assistant reply to database
@@ -1311,18 +1978,38 @@ async function streamWithGemini(
     const parts: any[] = [];
 
     if (isLatest && imageBase64) {
-      const match = imageBase64.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
-      if (match) {
+      let mimeType = 'image/jpeg';
+      let cleanBase64 = imageBase64;
+
+      if (imageBase64.includes(';base64,')) {
+        const splitIdx = imageBase64.indexOf(';base64,');
+        const meta = imageBase64.slice(0, splitIdx);
+        cleanBase64 = imageBase64.slice(splitIdx + 8);
+        const mimeMatch = meta.match(/data:([a-zA-Z0-9.+/-]+)/);
+        if (mimeMatch && mimeMatch[1]) {
+          mimeType = mimeMatch[1].trim();
+        }
+      }
+
+      // Remove any unwanted whitespace, carriage returns or newlines
+      cleanBase64 = cleanBase64.replace(/[\r\n\s]+/g, '');
+
+      if (cleanBase64) {
         parts.push({
           inlineData: {
-            mimeType: match[1],
-            data: match[2],
+            mimeType,
+            data: cleanBase64,
           },
         });
       }
     }
 
-    parts.push({ text: item.content || 'Hello' });
+    const userPrompt = (item.content || '').trim();
+    const promptText = userPrompt || (isLatest && imageBase64
+      ? 'Tafadhali soma na uchambue picha hii kwa kina. Eleza vitu, mandhari, na maelezo unayoyaona. Ikiwa picha ina maandishi yoyote, herufi, nambari au nyaraka, yasome yote (OCR) na unieleze kwa Kiswahili na Kiingereza.'
+      : 'Hello');
+
+    parts.push({ text: promptText });
 
     contents.push({
       role: item.role === 'assistant' ? 'model' : 'user',
