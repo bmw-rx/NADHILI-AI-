@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import pg from 'pg';
 import { neon } from '@neondatabase/serverless';
+import { cleanAppImageUrl } from './utils/imageHelper.ts';
 
 const { Pool } = pg;
 
@@ -92,6 +93,8 @@ interface LocalSchema {
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
+const DB_BACKUP_FILE = path.join(DATA_DIR, 'db.backup.json');
+const DATABASE_CONFIG_FILE = path.join(DATA_DIR, 'database_config.json');
 
 class DatabaseManager {
   private localData: LocalSchema = {
@@ -137,6 +140,18 @@ class DatabaseManager {
 
   constructor() {
     this.initLocal();
+
+    // Check for saved database configuration file if env not set
+    if (!this.databaseUrl && fs.existsSync(DATABASE_CONFIG_FILE)) {
+      try {
+        const raw = fs.readFileSync(DATABASE_CONFIG_FILE, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed.databaseUrl) {
+          this.databaseUrl = parsed.databaseUrl.trim();
+        }
+      } catch {}
+    }
+
     if (this.databaseUrl) {
       this.initDatabase(this.databaseUrl).catch((err) => {
         console.warn('Database connection notice:', err.message);
@@ -148,27 +163,75 @@ class DatabaseManager {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
+
+    let loaded = false;
+    // 1. Try primary db.json
     if (fs.existsSync(DB_FILE)) {
       try {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        const parsed = JSON.parse(raw);
-        this.localData = {
-          users: parsed.users || [],
-          conversations: parsed.conversations || [],
-          messages: parsed.messages || [],
-          payments: parsed.payments || [],
-          notifications: parsed.notifications || [],
-          premiumApps: parsed.premiumApps || [],
-          appPurchases: parsed.appPurchases || [],
-        };
-        this.ensureDefaultApps();
-      } catch {
-        this.ensureDefaultApps();
-        this.saveLocal();
+        if (raw.trim()) {
+          const parsed = JSON.parse(raw);
+          this.localData = {
+            users: Array.isArray(parsed.users) ? parsed.users : [],
+            conversations: Array.isArray(parsed.conversations) ? parsed.conversations : [],
+            messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+            payments: Array.isArray(parsed.payments) ? parsed.payments : [],
+            notifications: Array.isArray(parsed.notifications) ? parsed.notifications : [],
+            premiumApps: Array.isArray(parsed.premiumApps) ? parsed.premiumApps : [],
+            appPurchases: Array.isArray(parsed.appPurchases) ? parsed.appPurchases : [],
+          };
+          loaded = true;
+        }
+      } catch (err) {
+        console.warn('Primary db.json corrupted or unreadable, attempting backup recovery...', err);
       }
-    } else {
-      this.ensureDefaultApps();
-      this.saveLocal();
+    }
+
+    // 2. If primary failed or was empty, attempt backup recovery
+    if (!loaded && fs.existsSync(DB_BACKUP_FILE)) {
+      try {
+        const rawBackup = fs.readFileSync(DB_BACKUP_FILE, 'utf-8');
+        if (rawBackup.trim()) {
+          const parsed = JSON.parse(rawBackup);
+          this.localData = {
+            users: Array.isArray(parsed.users) ? parsed.users : [],
+            conversations: Array.isArray(parsed.conversations) ? parsed.conversations : [],
+            messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+            payments: Array.isArray(parsed.payments) ? parsed.payments : [],
+            notifications: Array.isArray(parsed.notifications) ? parsed.notifications : [],
+            premiumApps: Array.isArray(parsed.premiumApps) ? parsed.premiumApps : [],
+            appPurchases: Array.isArray(parsed.appPurchases) ? parsed.appPurchases : [],
+          };
+          loaded = true;
+          console.log('Successfully recovered database from db.backup.json');
+        }
+      } catch (backupErr) {
+        console.warn('Backup recovery failed:', backupErr);
+      }
+    }
+
+    this.sanitizeLoadedApps();
+    this.ensureDefaultApps();
+    this.saveLocal();
+  }
+
+  private sanitizeLoadedApps() {
+    if (!this.localData.premiumApps || !Array.isArray(this.localData.premiumApps)) {
+      this.localData.premiumApps = [];
+      return;
+    }
+
+    // Fix dead catbox or invalid placeholder URLs in loaded apps
+    for (const app of this.localData.premiumApps) {
+      if (
+        !app.imageUrl ||
+        app.imageUrl.includes('catbox.moe') ||
+        app.imageUrl.includes('example.com')
+      ) {
+        app.imageUrl = '/logo.svg';
+      } else {
+        app.imageUrl = cleanAppImageUrl(app.imageUrl);
+      }
     }
   }
 
@@ -177,7 +240,17 @@ class DatabaseManager {
       if (!fs.existsSync(DATA_DIR)) {
         fs.mkdirSync(DATA_DIR, { recursive: true });
       }
-      fs.writeFileSync(DB_FILE, JSON.stringify(this.localData, null, 2), 'utf-8');
+      const dataStr = JSON.stringify(this.localData, null, 2);
+      
+      // Atomic write to prevent partial file writes / corruptions on crash or reload
+      const tempFile = path.join(DATA_DIR, `db.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 7)}`);
+      fs.writeFileSync(tempFile, dataStr, 'utf-8');
+      fs.renameSync(tempFile, DB_FILE);
+
+      // Save secondary backup file for reliability
+      try {
+        fs.writeFileSync(DB_BACKUP_FILE, dataStr, 'utf-8');
+      } catch {}
     } catch (err) {
       console.error('Failed to save local db.json', err);
     }
@@ -246,9 +319,12 @@ class DatabaseManager {
       // Synchronize existing local memory into the database
       await this.syncLocalToDatabase();
 
+      // Synchronize existing database records back into local memory
+      await this.syncDatabaseToLocal();
+
       return {
         success: true,
-        message: 'Database connected and synchronized.',
+        message: 'Database connected and synchronized successfully.',
       };
     }
 
@@ -258,6 +334,27 @@ class DatabaseManager {
   // Alias for backward compatibility with existing route
   async initNeon(url: string) {
     return this.initDatabase(url);
+  }
+
+  async saveDatabaseUrl(url: string): Promise<{ success: boolean; message: string }> {
+    const res = await this.initDatabase(url);
+    if (res.success) {
+      try {
+        if (!fs.existsSync(DATA_DIR)) {
+          fs.mkdirSync(DATA_DIR, { recursive: true });
+        }
+        fs.writeFileSync(
+          DATABASE_CONFIG_FILE,
+          JSON.stringify({ databaseUrl: url.trim(), connectedAt: Date.now() }, null, 2),
+          'utf-8'
+        );
+        process.env.DATABASE_URL = url.trim();
+        this.databaseUrl = url.trim();
+      } catch (err) {
+        console.error('Failed to write database_config.json', err);
+      }
+    }
+    return res;
   }
 
   private async executeQuery(text: string, params: any[] = []): Promise<any[]> {
@@ -322,6 +419,35 @@ class DatabaseManager {
       await this.executeQuery(`
         CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at ASC);
       `);
+
+      await this.executeQuery(`
+        CREATE TABLE IF NOT EXISTS premium_apps (
+          id VARCHAR(255) PRIMARY KEY,
+          name VARCHAR(255) NOT NULL,
+          image_url TEXT NOT NULL,
+          description TEXT,
+          price_tzs INTEGER NOT NULL,
+          download_url TEXT NOT NULL,
+          version VARCHAR(50),
+          size VARCHAR(50),
+          category VARCHAR(100),
+          created_at BIGINT
+        );
+      `);
+
+      await this.executeQuery(`
+        CREATE TABLE IF NOT EXISTS app_purchases (
+          id VARCHAR(255) PRIMARY KEY,
+          app_id VARCHAR(255) NOT NULL,
+          user_id VARCHAR(255),
+          phone_number VARCHAR(50),
+          order_reference VARCHAR(255) UNIQUE,
+          amount INTEGER,
+          status VARCHAR(50),
+          created_at BIGINT,
+          unlocked_at BIGINT
+        );
+      `);
     } catch (err) {
       console.warn('Migration notice:', err);
     }
@@ -357,8 +483,77 @@ class DatabaseManager {
           [m.id, m.conversation_id, m.role, m.content, m.created_at]
         );
       }
+
+      for (const app of (this.localData.premiumApps || [])) {
+        await this.executeQuery(
+          `INSERT INTO premium_apps (id, name, image_url, description, price_tzs, download_url, version, size, category, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           ON CONFLICT (id) DO NOTHING;`,
+          [app.id, app.name, app.imageUrl, app.description, app.priceTZS, app.downloadUrl, app.version, app.size, app.category, app.createdAt]
+        );
+      }
     } catch (e) {
       console.warn('Sync to database notice:', e);
+    }
+  }
+
+  private async syncDatabaseToLocal() {
+    if (!this.dbConnected) return;
+
+    try {
+      // 1. Fetch apps from PostgreSQL
+      const appRows = await this.executeQuery(
+        `SELECT id, name, image_url, description, price_tzs, download_url, version, size, category, created_at
+         FROM premium_apps
+         ORDER BY created_at DESC;`
+      );
+      if (appRows && appRows.length > 0) {
+        this.localData.premiumApps = appRows.map((r: any) => ({
+          id: String(r.id),
+          name: r.name,
+          imageUrl: cleanAppImageUrl(r.image_url),
+          description: r.description || '',
+          priceTZS: Number(r.price_tzs) || 2500,
+          downloadUrl: r.download_url,
+          version: r.version || 'v1.0.0',
+          size: r.size || '45 MB',
+          category: r.category || 'AI Tools & Mobile',
+          createdAt: Number(r.created_at) || Date.now(),
+        }));
+      }
+
+      // 2. Fetch users from PostgreSQL
+      const userRows = await this.executeQuery(
+        `SELECT id, name, email, password_hash, plan, created_at FROM users;`
+      );
+      if (userRows && userRows.length > 0) {
+        this.localData.users = userRows.map((r: any) => ({
+          id: String(r.id),
+          name: r.name,
+          email: r.email,
+          password_hash: r.password_hash,
+          plan: r.plan || 'free',
+          created_at: Number(r.created_at) || Math.floor(Date.now() / 1000),
+        }));
+      }
+
+      // 3. Fetch conversations
+      const convRows = await this.executeQuery(
+        `SELECT id, user_id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC;`
+      );
+      if (convRows && convRows.length > 0) {
+        this.localData.conversations = convRows.map((r: any) => ({
+          id: String(r.id),
+          user_id: String(r.user_id),
+          title: r.title,
+          created_at: Number(r.created_at) || Math.floor(Date.now() / 1000),
+          updated_at: Number(r.updated_at) || Math.floor(Date.now() / 1000),
+        }));
+      }
+
+      this.saveLocal();
+    } catch (err) {
+      console.warn('syncDatabaseToLocal error:', err);
     }
   }
 
@@ -640,17 +835,103 @@ class DatabaseManager {
   }
 
   async getPremiumApps(): Promise<Omit<PremiumApp, 'downloadUrl'>[]> {
+    if (this.dbConnected) {
+      try {
+        const rows = await this.executeQuery(
+          `SELECT id, name, image_url, description, price_tzs, download_url, version, size, category, created_at
+           FROM premium_apps
+           ORDER BY created_at DESC;`
+        );
+        if (rows && rows.length > 0) {
+          const dbApps: PremiumApp[] = rows.map((r: any) => ({
+            id: String(r.id),
+            name: r.name,
+            imageUrl: cleanAppImageUrl(r.image_url),
+            description: r.description || '',
+            priceTZS: Number(r.price_tzs) || 2500,
+            downloadUrl: r.download_url,
+            version: r.version || 'v1.0.0',
+            size: r.size || '45 MB',
+            category: r.category || 'AI Tools & Mobile',
+            createdAt: Number(r.created_at) || Date.now(),
+          }));
+          this.localData.premiumApps = dbApps;
+          this.saveLocal();
+          return dbApps.map(({ downloadUrl, ...rest }) => rest);
+        }
+      } catch (err) {
+        console.error('Database getPremiumApps error, falling back:', err);
+      }
+    }
+
     this.ensureDefaultApps();
-    // Omit downloadUrl for security - public never gets the secret link until payment success!
     return this.localData.premiumApps.map(({ downloadUrl, ...rest }) => rest);
   }
 
   async getAllPremiumAppsAdmin(): Promise<PremiumApp[]> {
+    if (this.dbConnected) {
+      try {
+        const rows = await this.executeQuery(
+          `SELECT id, name, image_url, description, price_tzs, download_url, version, size, category, created_at
+           FROM premium_apps
+           ORDER BY created_at DESC;`
+        );
+        if (rows && rows.length > 0) {
+          const dbApps: PremiumApp[] = rows.map((r: any) => ({
+            id: String(r.id),
+            name: r.name,
+            imageUrl: cleanAppImageUrl(r.image_url),
+            description: r.description || '',
+            priceTZS: Number(r.price_tzs) || 2500,
+            downloadUrl: r.download_url,
+            version: r.version || 'v1.0.0',
+            size: r.size || '45 MB',
+            category: r.category || 'AI Tools & Mobile',
+            createdAt: Number(r.created_at) || Date.now(),
+          }));
+          this.localData.premiumApps = dbApps;
+          this.saveLocal();
+          return dbApps;
+        }
+      } catch (err) {
+        console.error('Database getAllPremiumAppsAdmin error, falling back:', err);
+      }
+    }
+
     this.ensureDefaultApps();
     return this.localData.premiumApps;
   }
 
   async getPremiumAppById(id: string): Promise<PremiumApp | undefined> {
+    if (this.dbConnected) {
+      try {
+        const rows = await this.executeQuery(
+          `SELECT id, name, image_url, description, price_tzs, download_url, version, size, category, created_at
+           FROM premium_apps
+           WHERE id = $1
+           LIMIT 1;`,
+          [id]
+        );
+        if (rows && rows.length > 0) {
+          const r = rows[0];
+          return {
+            id: String(r.id),
+            name: r.name,
+            imageUrl: cleanAppImageUrl(r.image_url),
+            description: r.description || '',
+            priceTZS: Number(r.price_tzs) || 2500,
+            downloadUrl: r.download_url,
+            version: r.version || 'v1.0.0',
+            size: r.size || '45 MB',
+            category: r.category || 'AI Tools & Mobile',
+            createdAt: Number(r.created_at) || Date.now(),
+          };
+        }
+      } catch (err) {
+        console.error('Database getPremiumAppById error, falling back:', err);
+      }
+    }
+
     if (!this.localData.premiumApps) {
       this.localData.premiumApps = [];
     }
@@ -661,13 +942,37 @@ class DatabaseManager {
     if (!this.localData.premiumApps) {
       this.localData.premiumApps = [];
     }
+    const cleanImg = cleanAppImageUrl(data.imageUrl);
     const newApp: PremiumApp = {
       ...data,
+      imageUrl: cleanImg,
       id: 'app_' + crypto.randomUUID(),
       createdAt: Date.now(),
     };
     this.localData.premiumApps.unshift(newApp);
     this.saveLocal();
+
+    if (this.dbConnected) {
+      try {
+        await this.executeQuery(
+          `INSERT INTO premium_apps (id, name, image_url, description, price_tzs, download_url, version, size, category, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           ON CONFLICT (id) DO UPDATE SET
+             name = EXCLUDED.name,
+             image_url = EXCLUDED.image_url,
+             description = EXCLUDED.description,
+             price_tzs = EXCLUDED.price_tzs,
+             download_url = EXCLUDED.download_url,
+             version = EXCLUDED.version,
+             size = EXCLUDED.size,
+             category = EXCLUDED.category;`,
+          [newApp.id, newApp.name, newApp.imageUrl, newApp.description, newApp.priceTZS, newApp.downloadUrl, newApp.version, newApp.size, newApp.category, newApp.createdAt]
+        );
+      } catch (err) {
+        console.warn('DB createPremiumApp error:', err);
+      }
+    }
+
     return newApp;
   }
 
@@ -675,8 +980,34 @@ class DatabaseManager {
     if (!this.localData.premiumApps) return null;
     const app = this.localData.premiumApps.find((a) => a.id === id);
     if (!app) return null;
+    
+    if (data.imageUrl) {
+      data.imageUrl = cleanAppImageUrl(data.imageUrl);
+    }
+    
     Object.assign(app, data);
     this.saveLocal();
+
+    if (this.dbConnected) {
+      try {
+        await this.executeQuery(
+          `UPDATE premium_apps
+           SET name = COALESCE($1, name),
+               image_url = COALESCE($2, image_url),
+               description = COALESCE($3, description),
+               price_tzs = COALESCE($4, price_tzs),
+               download_url = COALESCE($5, download_url),
+               version = COALESCE($6, version),
+               size = COALESCE($7, size),
+               category = COALESCE($8, category)
+           WHERE id = $9;`,
+          [app.name, app.imageUrl, app.description, app.priceTZS, app.downloadUrl, app.version, app.size, app.category, id]
+        );
+      } catch (err) {
+        console.warn('DB updatePremiumApp error:', err);
+      }
+    }
+
     return app;
   }
 
@@ -686,6 +1017,15 @@ class DatabaseManager {
     this.localData.premiumApps = this.localData.premiumApps.filter((a) => a.id !== id);
     if (this.localData.premiumApps.length !== initialLen) {
       this.saveLocal();
+
+      if (this.dbConnected) {
+        try {
+          await this.executeQuery(`DELETE FROM premium_apps WHERE id = $1;`, [id]);
+        } catch (err) {
+          console.warn('DB deletePremiumApp error:', err);
+        }
+      }
+
       return true;
     }
     return false;

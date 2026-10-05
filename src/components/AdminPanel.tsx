@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ShieldCheck,
   Users,
@@ -26,7 +26,10 @@ import {
   Check,
   X,
   FileCode,
+  Upload,
+  Image as ImageIcon,
 } from 'lucide-react';
+import { cleanAppImageUrl, fileToCompressedDataUrl, PRESET_APP_ICONS, getProxiedImageUrl } from '../utils/imageHelper';
 
 interface AdminStats {
   totalUsers: number;
@@ -87,7 +90,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToChat, showToast 
   const [userSearch, setUserSearch] = useState('');
 
   // Apps Management State
-  const [apps, setApps] = useState<AdminApp[]>([]);
+  const [apps, setApps] = useState<AdminApp[]>(() => {
+    try {
+      const saved = localStorage.getItem('nadhili_admin_apps_backup');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [appName, setAppName] = useState('');
   const [appImageUrl, setAppImageUrl] = useState('');
   const [appDescription, setAppDescription] = useState('');
@@ -98,6 +108,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToChat, showToast 
   const [appCategory, setAppCategory] = useState('AI Tools & Mobile');
   const [savingApp, setSavingApp] = useState(false);
   const [deletingAppId, setDeletingAppId] = useState<string | null>(null);
+  const imageFileInputRef = useRef<HTMLInputElement>(null);
 
   // ClickPesa Payments Config & Gateway Monitoring
   const [clickpesaClientId, setClickpesaClientId] = useState('');
@@ -162,43 +173,50 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToChat, showToast 
         'x-admin-key': '3006',
       };
 
-      const [resStats, resUsers, resNotifs, resApps, resPayList, resCpConfig] = await Promise.all([
-        fetch('/api/admin/overview', { headers }),
-        fetch('/api/admin/users', { headers }),
-        fetch('/api/notifications'),
-        fetch('/api/admin/apps', { headers }),
-        fetch('/api/admin/payments', { headers }),
-        fetch('/api/payments/clickpesa/config'),
+      // Use individual promises so failure of one does not block others
+      await Promise.allSettled([
+        fetch('/api/admin/overview', { headers })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => d && setStats(d)),
+        fetch('/api/admin/users', { headers })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => d?.users && setUsers(d.users)),
+        fetch('/api/notifications')
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => d?.notifications && setNotifications(d.notifications)),
+        fetch('/api/admin/apps', { headers })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => {
+            if (d?.apps) {
+              setApps(d.apps);
+              try {
+                localStorage.setItem('nadhili_admin_apps_backup', JSON.stringify(d.apps));
+              } catch {}
+            }
+          }),
+        fetch('/api/admin/payments', { headers })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => d?.payments && setPaymentsList(d.payments)),
+        fetch('/api/payments/clickpesa/config')
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => d?.baseUrl && setClickpesaBaseUrl(d.baseUrl)),
       ]);
-
-      if (resStats.ok) {
-        const statsData = await resStats.json();
-        setStats(statsData);
-      }
-      if (resUsers.ok) {
-        const usersData = await resUsers.json();
-        setUsers(usersData.users || []);
-      }
-      if (resNotifs.ok) {
-        const notifsData = await resNotifs.json();
-        setNotifications(notifsData.notifications || []);
-      }
-      if (resApps.ok) {
-        const appsData = await resApps.json();
-        setApps(appsData.apps || []);
-      }
-      if (resPayList.ok) {
-        const payData = await resPayList.json();
-        setPaymentsList(payData.payments || []);
-      }
-      if (resCpConfig.ok) {
-        const cpData = await resCpConfig.json();
-        setClickpesaBaseUrl(cpData.baseUrl || 'https://api.clickpesa.com');
-      }
     } catch (err) {
       console.error('Error fetching admin data:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleImageFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await fileToCompressedDataUrl(file, 256);
+      setAppImageUrl(dataUrl);
+      showToast('Picha ya app imepakiwa kikamilifu!');
+    } catch {
+      showToast('Hitilafu ya kusoma faili la picha');
     }
   };
 
@@ -320,7 +338,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToChat, showToast 
         throw new Error(data.error || 'Haikuweza kuhifadhi App');
       }
 
-      showToast(`App ya "${appName}" imeongezwa kikamilifu!`);
+      showToast(`App ya "${appName}" imeongezwa na kuhifadhiwa kikamilifu!`);
+      if (data.app) {
+        setApps((prev) => [data.app, ...prev.filter((a) => a.id !== data.app.id)]);
+        try {
+          const currentBackup = JSON.parse(localStorage.getItem('nadhili_admin_apps_backup') || '[]');
+          localStorage.setItem(
+            'nadhili_admin_apps_backup',
+            JSON.stringify([data.app, ...currentBackup.filter((a: any) => a.id !== data.app.id)])
+          );
+        } catch {}
+      }
       setAppName('');
       setAppImageUrl('');
       setAppDescription('');
@@ -792,17 +820,94 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToChat, showToast 
                   />
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-300 mb-1">
-                    Picha ya App kwa URL (Image/Icon URL)
-                  </label>
-                  <input
-                    type="url"
-                    value={appImageUrl}
-                    onChange={(e) => setAppImageUrl(e.target.value)}
-                    placeholder="/logo.svg au URL nyingine ya picha ya app"
-                    className="w-full bg-[#121211] border border-[#333330] focus:border-[#da7756] rounded-xl px-3.5 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none transition"
-                  />
+                <div className="md:col-span-2 bg-[#121211] p-3.5 rounded-2xl border border-[#2b2b28] space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-semibold text-neutral-300">
+                      Picha ya App (Image / Icon) *
+                    </label>
+                    <input
+                      type="file"
+                      ref={imageFileInputRef}
+                      onChange={handleImageFileUpload}
+                      accept="image/*"
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => imageFileInputRef.current?.click()}
+                      className="flex items-center gap-1.5 px-3 py-1 bg-[#22221f] hover:bg-[#2c2c29] border border-[#383834] rounded-xl text-[11px] text-neutral-200 transition"
+                    >
+                      <Upload className="w-3.5 h-3.5 text-[#da7756]" />
+                      <span>Pakia Faili kutoka Kwenye Simu / Kifaa</span>
+                    </button>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+                    <input
+                      type="text"
+                      value={appImageUrl}
+                      onChange={(e) => setAppImageUrl(e.target.value)}
+                      placeholder="Weka URL ya picha (Google Drive, Imgur, direct link) au chagua hapa chini..."
+                      className="flex-1 w-full bg-[#161614] border border-[#333330] focus:border-[#da7756] rounded-xl px-3.5 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none transition"
+                    />
+
+                    {/* Live Preview Box */}
+                    <div className="flex items-center gap-2.5 px-3 py-1.5 bg-[#1b1b18] border border-[#33332f] rounded-xl shrink-0">
+                      <div className="w-9 h-9 rounded-lg bg-black/50 border border-[#3d3d39] overflow-hidden flex items-center justify-center p-0.5">
+                        <img
+                          src={cleanAppImageUrl(appImageUrl)}
+                          alt="Preview"
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            // Try proxy first if external
+                            const current = (e.target as any).src;
+                            if (!current.includes('/api/proxy-image') && !current.includes('/logo.svg')) {
+                              (e.target as any).src = getProxiedImageUrl(appImageUrl);
+                            } else {
+                              (e.target as any).src = '/logo.svg';
+                            }
+                          }}
+                          className="w-full h-full object-cover rounded-md"
+                        />
+                      </div>
+                      <div className="text-[10px] text-neutral-400">
+                        <span className="text-emerald-400 font-semibold block">Muonekano (Preview)</span>
+                        <span>{appImageUrl ? 'Picha imewekwa' : 'Default Logo'}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Preset App Icons Quick Selector */}
+                  <div className="space-y-1.5 pt-1">
+                    <span className="text-[10px] text-neutral-400 uppercase font-mono tracking-wider">
+                      Au chagua Icon za haraka za mifano:
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      {PRESET_APP_ICONS.map((preset) => (
+                        <button
+                          key={preset.name}
+                          type="button"
+                          onClick={() => {
+                            setAppImageUrl(preset.url);
+                            showToast(`Umechagua picha ya "${preset.name}"`);
+                          }}
+                          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] border transition ${
+                            appImageUrl === preset.url
+                              ? 'bg-[#da7756]/20 border-[#da7756] text-white font-semibold'
+                              : 'bg-[#181816] hover:bg-[#232320] border-[#30302c] text-neutral-300'
+                          }`}
+                        >
+                          <img
+                            src={preset.url}
+                            alt={preset.name}
+                            referrerPolicy="no-referrer"
+                            className="w-4 h-4 rounded object-cover"
+                          />
+                          <span>{preset.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
 
                 <div>
@@ -911,10 +1016,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToChat, showToast 
                       <div className="space-y-3">
                         <div className="flex items-start gap-3">
                           <img
-                            src={app.imageUrl || '/logo.svg'}
+                            src={cleanAppImageUrl(app.imageUrl)}
                             alt={app.name}
+                            referrerPolicy="no-referrer"
                             onError={(e) => {
-                              (e.target as any).src = '/logo.svg';
+                              const target = e.target as any;
+                              if (app.imageUrl && !target.src.includes('/api/proxy-image') && !target.src.includes('/logo.svg')) {
+                                target.src = getProxiedImageUrl(app.imageUrl);
+                              } else {
+                                target.src = '/logo.svg';
+                              }
                             }}
                             className="w-12 h-12 rounded-xl object-cover bg-black/40 border border-[#333] shrink-0"
                           />

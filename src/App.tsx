@@ -200,9 +200,34 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // UI state
+  // UI state & Shared App Deep-linking
+  const getInitialAppId = () => {
+    if (typeof window === 'undefined') return null;
+    const urlParams = new URLSearchParams(window.location.search);
+    const param = urlParams.get('app');
+    if (param) return param;
+    if (window.location.hash.includes('app=')) {
+      const hashQuery = window.location.hash.split('?')[1];
+      if (hashQuery) {
+        const hashParams = new URLSearchParams(hashQuery);
+        return hashParams.get('app');
+      }
+    }
+    return null;
+  };
+
+  const [sharedAppId, setSharedAppId] = useState<string | null>(getInitialAppId);
+
   const [activeView, setActiveView] = useState<'chat' | 'plans' | 'admin' | 'premium-apps'>(() => {
     if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (
+        urlParams.get('app') ||
+        window.location.search.includes('page=apps') ||
+        window.location.hash.includes('app=')
+      ) {
+        return 'premium-apps';
+      }
       if (window.location.pathname === '/nadhiliai' || window.location.hash === '#/nadhiliai') {
         return 'admin';
       }
@@ -221,11 +246,20 @@ export default function App() {
     return 'chat';
   });
 
-  // Independent URL popstate handler (back/forward button support)
+  // Independent URL popstate handler (back/forward button support & shared links)
   useEffect(() => {
     const handlePopState = () => {
       const path = window.location.pathname;
       const hash = window.location.hash;
+      const urlParams = new URLSearchParams(window.location.search);
+      const appInUrl = urlParams.get('app');
+
+      if (appInUrl) {
+        setSharedAppId(appInUrl);
+        setActiveView('premium-apps');
+        return;
+      }
+
       if (path === '/nadhiliai' || hash === '#/nadhiliai') {
         setActiveView('admin');
       } else if (
@@ -1489,6 +1523,7 @@ export default function App() {
       <PremiumAppsPage
         onBackToChat={navigateToChat}
         showToast={showToast}
+        initialAppId={sharedAppId}
       />
     );
   }

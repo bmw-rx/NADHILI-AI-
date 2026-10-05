@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import { db } from './src/db.ts';
 import { hashPassword, comparePassword, signToken, verifyToken } from './src/auth.ts';
+import { cleanAppImageUrl } from './src/utils/imageHelper.ts';
 
 dotenv.config();
 
@@ -1499,7 +1500,7 @@ app.post('/api/admin/apps', async (req: Request, res: Response) => {
 
     const created = await db.createPremiumApp({
       name: name.trim(),
-      imageUrl: (imageUrl || '').trim() || 'https://files.catbox.moe/jfvyv5.png',
+      imageUrl: (imageUrl || '').trim() || '/logo.svg',
       description: (description || '').trim(),
       priceTZS: Number(priceTZS) || 3000,
       downloadUrl: downloadUrl.trim(),
@@ -1568,6 +1569,136 @@ app.post('/api/admin/apps/unlock', async (req: Request, res: Response) => {
       unlockedAt: Date.now(),
     });
     return res.json({ success: true, message: 'App imefunguliwa kwa mtumiaji huyu moja kwa moja!' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// High-speed reliable Image Proxy (solves external hotlinking, CORS, and 403 Forbidden issues)
+app.get('/api/proxy-image', async (req: Request, res: Response) => {
+  const imageUrl = req.query.url as string;
+  if (!imageUrl || typeof imageUrl !== 'string') {
+    return res.redirect('/logo.svg');
+  }
+
+  try {
+    const cleanUrl = cleanAppImageUrl(imageUrl);
+    if (cleanUrl.startsWith('/') || cleanUrl.startsWith('data:')) {
+      return res.redirect(cleanUrl);
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 9000);
+
+    const upstream = await fetch(cleanUrl, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        Referer: new URL(cleanUrl).origin,
+      },
+    });
+    clearTimeout(timeout);
+
+    if (!upstream.ok) {
+      return res.redirect('/logo.svg');
+    }
+
+    const contentType = upstream.headers.get('content-type') || 'image/png';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+
+    const arrayBuffer = await upstream.arrayBuffer();
+    return res.send(Buffer.from(arrayBuffer));
+  } catch (err) {
+    return res.redirect('/logo.svg');
+  }
+});
+
+// Admin App Submission endpoint (ensures submitted apps are saved & never lost)
+app.post('/api/apps/submit', async (req: Request, res: Response) => {
+  if (!checkAdminAuth(req)) {
+    return res.status(403).json({ error: 'Ruhusa imezuiwa: Ni Admin pekee anayeweza kupakia programu.' });
+  }
+  try {
+    const { name, imageUrl, description, priceTZS, downloadUrl, version, size, category } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Jina la App linahitajika.' });
+    }
+    if (!downloadUrl || !downloadUrl.trim()) {
+      return res.status(400).json({ error: 'Download Link ya App inahitajika.' });
+    }
+
+    const created = await db.createPremiumApp({
+      name: name.trim(),
+      imageUrl: cleanAppImageUrl(imageUrl || '/logo.svg'),
+      description: (description || '').trim() || 'App ya kisasa ya NADHILI Platform.',
+      priceTZS: Math.max(500, Number(priceTZS) || 2000),
+      downloadUrl: downloadUrl.trim(),
+      version: (version || '').trim() || 'v1.0.0',
+      size: (size || '').trim() || '45 MB',
+      category: (category || '').trim() || 'AI Tools & Mobile',
+    });
+
+    return res.json({
+      success: true,
+      app: created,
+      message: 'App yako imetumwa na kuchapishwa kikamilifu kwenye NADHILI Store!',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Hitilafu ya kupokea app' });
+  }
+});
+
+// Admin Database Management (PostgreSQL, Neon, Cloud SQL)
+app.get('/api/admin/database', async (req: Request, res: Response) => {
+  if (!checkAdminAuth(req)) {
+    return res.status(403).json({ error: 'Ruhusa imezuiwa.' });
+  }
+  const status = db.getStatus();
+  const currentUrl = process.env.DATABASE_URL || '';
+  const maskedUrl = currentUrl ? currentUrl.replace(/:\/\/([^:]+):([^@]+)@/, '://$1:••••••••@') : '';
+  return res.json({
+    connected: status.connected,
+    provider: status.provider,
+    databaseUrl: maskedUrl,
+    hasUrlConfigured: Boolean(currentUrl),
+  });
+});
+
+app.post('/api/admin/database', async (req: Request, res: Response) => {
+  if (!checkAdminAuth(req)) {
+    return res.status(403).json({ error: 'Ruhusa imezuiwa.' });
+  }
+  const { databaseUrl } = req.body;
+  if (!databaseUrl || typeof databaseUrl !== 'string') {
+    return res.status(400).json({ error: 'Tafadhali weka URL ya database (PostgreSQL / Neon connection string).' });
+  }
+  try {
+    const result = await db.saveDatabaseUrl(databaseUrl.trim());
+    return res.json({
+      success: true,
+      message: result.message || 'Database imeunganishwa na kusawazishwa kikamilifu!',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Haikuweza kuunganisha database.' });
+  }
+});
+
+app.post('/api/admin/database/test', async (req: Request, res: Response) => {
+  if (!checkAdminAuth(req)) {
+    return res.status(403).json({ error: 'Ruhusa imezuiwa.' });
+  }
+  const { databaseUrl } = req.body;
+  const urlToTest = databaseUrl || process.env.DATABASE_URL;
+  if (!urlToTest) {
+    return res.status(400).json({ error: 'Hakuna URL ya database ya kujaribu.' });
+  }
+  try {
+    const result = await db.initDatabase(urlToTest.trim());
+    return res.json(result);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
